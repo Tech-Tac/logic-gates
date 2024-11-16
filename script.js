@@ -338,6 +338,8 @@ class Workspace {
    */
   components = [];
 
+  scale = devicePixelRatio || 1;
+
   zoom = 1;
   panX = 0;
   panY = 0;
@@ -371,10 +373,7 @@ class Workspace {
 
   constructor(canvas) {
     this.ctx = canvas.getContext("2d");
-    // this.resizeCanvas();
-    this.addEventListeners();
-
-    this.zoom = devicePixelRatio;
+    this.initializeCanvas();
   }
 
   addComponent(component) {
@@ -386,12 +385,21 @@ class Workspace {
     this.components.splice(this.components.indexOf(component), 1);
   }
 
+  // Unused
   worldToScreen(x, y) {
-    return [this.ctx.canvas.width / 2 + this.panX * this.zoom + x * this.zoom, this.ctx.canvas.height / 2 + this.panY * this.zoom + y * this.zoom];
+    return [
+      this.ctx.canvas.width / 2 + this.panX * this.zoom * this.scale + x * this.zoom * this.scale,
+      this.ctx.canvas.height / 2 + this.panY * this.zoom * this.scale + y * this.zoom * this.scale,
+    ];
+  }
+
+  // No screen scaling calculations
+  canvasToWorld(x, y) {
+    return [(x - this.ctx.canvas.width / 2 - this.panX * this.zoom) / this.zoom, (y - this.ctx.canvas.height / 2 - this.panY * this.zoom) / this.zoom];
   }
 
   screenToWorld(x, y) {
-    return [(x - this.ctx.canvas.width / 2 - this.panX * this.zoom) / this.zoom, (y - this.ctx.canvas.height / 2 - this.panY * this.zoom) / this.zoom];
+    return [(x * this.scale - this.ctx.canvas.width / 2 - this.panX * this.zoom) / this.zoom, (y * this.scale - this.ctx.canvas.height / 2 - this.panY * this.zoom) / this.zoom];
   }
 
   getComponentAt(x, y) {
@@ -408,23 +416,28 @@ class Workspace {
     }
   }
 
-  addEventListeners() {
+  initializeCanvas() {
+    // Scale everything by the CSS pixel ratio to make the canvas crisp on high DPI screens
+    this.scale = devicePixelRatio || 1;
+
     const updateGrid = () => {
-      this.ctx.canvas.style.backgroundSize = `${this.gridSize * this.zoom}px ${this.gridSize * this.zoom}px`;
-      // this.ctx.canvas.style.backgroundPosition = `${this.ctx.canvas.width / 2 + this.panX * this.zoom}px ${this.ctx.canvas.height / 2 + this.panY * this.zoom}px`;
-      this.ctx.canvas.style.backgroundPosition = `${this.ctx.canvas.width / 2 + (this.panX + this.gridSize / 2) * this.zoom}px
-                                                  ${this.ctx.canvas.height / 2 + (this.panY + this.gridSize / 2) * this.zoom}px`;
+      this.ctx.canvas.style.backgroundSize = `${this.gridSize * (this.zoom / this.scale)}px ${this.gridSize * (this.zoom / this.scale)}px`;
+      // this.ctx.canvas.style.backgroundPosition = `${this.ctx.canvas.width / scale / 2 + this.panX * (this.zoom / scale)}px ${this.ctx.canvas.height / scale / 2 + this.panY * (this.zoom / scale)}px`;
+      this.ctx.canvas.style.backgroundPosition = `${this.ctx.canvas.width / this.scale / 2 + (this.panX + this.gridSize / 2) * (this.zoom / this.scale)}px
+                                                  ${this.ctx.canvas.height / this.scale / 2 + (this.panY + this.gridSize / 2) * (this.zoom / this.scale)}px`;
     };
 
     const resizeCanvas = () => {
+      this.scale = devicePixelRatio || 1;
       const rect = this.ctx.canvas.getBoundingClientRect();
-      this.ctx.canvas.width = rect.width * devicePixelRatio;
-      this.ctx.canvas.height = rect.height * devicePixelRatio;
+      this.ctx.canvas.width = rect.width * this.scale;
+      this.ctx.canvas.height = rect.height * this.scale;
       updateGrid();
     };
 
-    resizeCanvas();
+    this.zoom = this.scale;
 
+    resizeCanvas();
     updateGrid();
 
     window.addEventListener("resize", resizeCanvas.bind(this));
@@ -436,8 +449,11 @@ class Workspace {
         this.zoom = Math.min(5, Math.max(0.2, this.zoom));
         updateGrid();
       },
-      { passive: true }
+      { passive: true } // to shut up devtools
     );
+
+    let lastX = 0;
+    let lastY = 0;
 
     this.ctx.canvas.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
@@ -464,14 +480,15 @@ class Workspace {
       } else {
         this.isPanning = true;
       }
+
+      [lastX, lastY] = [e.clientX, e.clientY];
     });
 
-    let lastX = 0;
-    let lastY = 0;
+    // Listening on document to account for accidental movement outside the canvas
     document.addEventListener("pointermove", (e) => {
-      const point = this.screenToWorld(e.clientX, e.clientY);
+      const point = this.screenToWorld(e.clientX, e.clientY); // Assuming the canvas is at 0, 0
       [this._pointerX, this._pointerY] = point; // Store the current cursor position for use in draw()
-      const [deltaX, deltaY] = [e.clientX - lastX, e.clientY - lastY];
+      const [deltaX, deltaY] = [(e.clientX - lastX) * this.scale, (e.clientY - lastY) * this.scale];
 
       if (this.connectingOutputSlot) {
         const origin = this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex());
@@ -773,8 +790,11 @@ window.addEventListener("load", () => {
 
     newItem.addEventListener("click", () => {
       c = component.clone();
-      const position = workspace.screenToWorld((Math.random() * 0.6 + 0.3) * canvas.width, (Math.random() * 0.8 + 0.1) * canvas.height);
-      [c.x, c.y] = [Math.round(position[0] / workspace.gridSize) * workspace.gridSize, Math.round(position[1] / workspace.gridSize) * workspace.gridSize];
+      const position = workspace.canvasToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
+      [c.x, c.y] = [
+        Math.round(position[0] - c.width / 2 / workspace.gridSize) * workspace.gridSize,
+        Math.round(position[1] - c.height / 2 / workspace.gridSize) * workspace.gridSize,
+      ];
       workspace.components.push(c);
     });
 

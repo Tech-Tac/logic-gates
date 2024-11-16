@@ -1,0 +1,190 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+}
+
+.workspace {
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.grid {
+  background-image: linear-gradient(0deg, #6663 1px, transparent 0px), linear-gradient(90deg, #6663 1px, transparent 0px);
+  background-size: 16px 16px;
+  background-position: 50% 50%;
+  background-repeat: repeat;
+}
+
+.grid.grid-dotted {
+  background-image: radial-gradient(at center, #6663 2px, transparent 0px);
+}
+
+.palette {
+  position: absolute;
+  height: 100%;
+  top: 0;
+  left: -170pt;
+  width: 192pt;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  gap: 8pt;
+  padding: 12pt 8pt;
+  scrollbar-gutter: stable both-edges;
+  opacity: 0;
+  background-color: #8884;
+  box-shadow: 0 0 16pt #0006;
+  backdrop-filter: blur(8px);
+  transition-property: left, opacity, background-color;
+  transition-timing-function: ease;
+  transition-duration: 200ms;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+.palette:hover {
+  left: 0;
+  opacity: 1;
+}
+
+.palette.danger {
+  background-color: #d218;
+}
+
+.palette-item {
+  object-fit: contain;
+  -webkit-user-drag: none;
+  -moz-user-drag: none;
+  padding: 8pt;
+  text-align: center;
+  transition: scale 100ms;
+}
+
+.palette-item:hover {
+  scale: 1.05;
+}
+
+.palette-item:active {
+  scale: 0.95;
+  filter: brightness(0.9);
+}
+
+.context-menu {
+  position: fixed;
+  left: 0;
+  top: 0;
+  list-style: none;
+  margin: 0;
+  min-width: 128pt;
+  max-width: 100vw;
+  max-height: 100vh;
+  border-radius: 8pt;
+  padding: 0;
+  padding-block: 8pt;
+  font-size: 14pt;
+  background-color: #8884;
+  box-shadow: 0 0 16px #0006;
+  backdrop-filter: blur(16px);
+  transform-origin: 0 0;
+}
+
+.context-menu.appear {
+  animation: appear 200ms ease;
+}
+
+@keyframes appear {
+  0% {
+    scale: 0;
+    opacity: 0;
+  }
+}
+
+li > ul {
+  position: absolute;
+  left: 100%;
+  top: -8pt;
+}
+
+.context-menu li {
+  position: relative;
+  padding: 4pt;
+  padding-inline-end: 32pt;
+  white-space: nowrap;
+  transition: background-color 100ms;
+}
+
+.context-menu li.disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.context-menu li::before {
+  content: "";
+  display: inline-block;
+  vertical-align: middle;
+  height: 24pt;
+  width: 24pt;
+  margin-inline-end: 4pt;
+}
+
+.context-menu li:has(> ul)::after {
+  content: ">";
+  font-family: monospace;
+  position: absolute;
+  right: 0;
+  margin-inline: 8pt;
+}
+
+.context-menu li:hover {
+  background-color: #4bf6;
+}
+
+.context-menu small {
+  float: inline-end;
+  opacity: 0.75;
+  margin-top: 2pt;
+}
+
+.context-menu hr {
+  border: none;
+  border-top: CanvasText 1pt solid;
+  opacity: 0.35;
+  margin: 6pt 12pt;
+}
+
+@media (prefers-reduced-motion) {
+  .palette,
+  .context-menu,
+  .context-menu > li {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency) or (prefers-contrast: more) {
+  .palette,
+  .context-menu {
+    backdrop-filter: none;
+    background-color: Canvas;
+    border: CanvasText 2px solid;
+  }
+
+  .palette {
+    border: none;
+    border-inline-end: CanvasText 2px solid;
+  }
+}

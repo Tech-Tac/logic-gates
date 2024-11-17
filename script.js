@@ -7,7 +7,7 @@ class Slot {
 
   value = false;
 
-  _cachedIndex;
+  #cachedIndex;
 
   constructor(owner) {
     this.owner = owner;
@@ -15,10 +15,10 @@ class Slot {
 
   getIndex(list) {
     // Store the result since it shouldn't change anyway
-    if (!this._cachedIndex) {
+    if (!this.#cachedIndex) {
       this._cachedIndex = this.owner[list].indexOf(this);
     }
-    return this._cachedIndex;
+    return this.#cachedIndex;
   }
 }
 
@@ -125,15 +125,8 @@ class Component {
   label = "";
   x = 0;
   y = 0;
-
-  get width() {
-    // this is meth not math
-    return Math.min(Math.max(80, Math.ceil((this.label.length * 16 + 24) / 16) * 16), 192);
-  }
-
-  get height() {
-    return Math.max(this.inputs.length * this.sizing, this.outputs.length * this.sizing, this.sizing);
-  }
+  width = 80;
+  height = this.sizing;
 
   /**
    * Input slots
@@ -153,6 +146,8 @@ class Component {
     this.inputs = Array.from({ length: numInputs }, () => new InputSlot(this));
     this.outputs = Array.from({ length: numOutputs }, () => new OutputSlot(this));
     this.evaluate = evaluateFunc;
+    this.width = Math.min(Math.max(80, Math.ceil((this.label.length * 16 + 24) / 16) * 16), 192);
+    this.height = Math.max(this.inputs.length * this.sizing, this.outputs.length * this.sizing, this.sizing);
     this.update();
   }
 
@@ -327,6 +322,29 @@ const defaultComponents = {
   xnor: new Component("xnor", (inputs) => [!(inputs.indexOf(true) === inputs.lastIndexOf(true) && inputs.indexOf(true) !== -1)]),
 };
 
+class EasedAnimation {
+  constructor(subject, property, targetValue, length, easingFunc = (t) => t, endCallback = () => {}) {
+    this.subject = subject;
+    this.property = property;
+    this.initialValue = subject[property];
+    this.targetValue = targetValue;
+    this.startTime = performance.now();
+    this.length = length;
+    this.easingFunc = easingFunc;
+    this.endCallback = endCallback;
+  }
+
+  tick(timestamp = performance.now()) {
+    const time = timestamp - this.startTime;
+    if (time > this.length) {
+      this.subject[this.property] = this.targetValue;
+      this.endCallback?.();
+      return;
+    }
+    this.subject[this.property] = this.initialValue + this.easingFunc(time / this.length) * (this.targetValue - this.initialValue);
+  }
+}
+
 class Workspace {
   inputs = [];
 
@@ -368,6 +386,11 @@ class Workspace {
    */
   ctx;
 
+  /**
+   * @type {EasedAnimation[]}
+   */
+  animationQueue = [];
+
   _pointerX = 0;
   _pointerY = 0;
 
@@ -383,6 +406,17 @@ class Workspace {
   removeComponent(component) {
     component.dismember();
     this.components.splice(this.components.indexOf(component), 1);
+  }
+
+  registerAnimation(subject, property, targetValue, length, easingFunc, endCallback) {
+    const that = this;
+    this.animationQueue.push(
+      new EasedAnimation(subject, property, targetValue, length, easingFunc, function () {
+        let index = that.animationQueue.indexOf(this);
+        if (index !== -1) that.animationQueue.splice(index, 1); // Dispose the animation
+        endCallback?.();
+      })
+    );
   }
 
   // Unused
@@ -425,6 +459,8 @@ class Workspace {
       // this.ctx.canvas.style.backgroundPosition = `${this.ctx.canvas.width / scale / 2 + this.panX * (this.zoom / scale)}px ${this.ctx.canvas.height / scale / 2 + this.panY * (this.zoom / scale)}px`;
       this.ctx.canvas.style.backgroundPosition = `${this.ctx.canvas.width / this.scale / 2 + (this.panX + this.gridSize / 2) * (this.zoom / this.scale)}px
                                                   ${this.ctx.canvas.height / this.scale / 2 + (this.panY + this.gridSize / 2) * (this.zoom / this.scale)}px`;
+
+      this.draw();
     };
 
     const resizeCanvas = () => {
@@ -435,7 +471,7 @@ class Workspace {
       updateGrid();
     };
 
-    this.zoom = this.scale;
+    this.zoom *= this.scale;
 
     resizeCanvas();
     updateGrid();
@@ -459,6 +495,7 @@ class Workspace {
       if (e.button !== 0) return;
 
       let [x, y] = this.screenToWorld(e.offsetX, e.offsetY);
+      [this._pointerX, this._pointerY] = [x, y];
       const target = this.getComponentAt(x, y);
 
       if (target) {
@@ -472,6 +509,7 @@ class Workspace {
           } else {
             targetInput.toggle();
           }
+          this.draw();
         } else if (relativeX > target.width - 12) {
           this.connectingOutputSlot = target.getOutputAtY(relativeY);
         } else {
@@ -518,12 +556,16 @@ class Workspace {
       }
 
       [lastX, lastY] = [e.clientX, e.clientY];
+
+      this.draw();
     });
 
     document.addEventListener("pointerup", (e) => {
       if (this.dragging) {
-        this.dragging.x = Math.round(this.dragging.x / this.gridSize) * this.gridSize;
-        this.dragging.y = Math.round(this.dragging.y / this.gridSize) * this.gridSize;
+        this.registerAnimation(this.dragging, "x", Math.round(this.dragging.x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+        this.registerAnimation(this.dragging, "y", Math.round(this.dragging.y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+        // this.dragging.x = Math.round(this.dragging.x / this.gridSize) * this.gridSize;
+        // this.dragging.y = Math.round(this.dragging.y / this.gridSize) * this.gridSize;
       } else if (this.connectingOutputSlot) {
         let [x, y] = this.screenToWorld(e.offsetX, e.offsetY);
 
@@ -589,9 +631,18 @@ class Workspace {
     });
   }
 
-  draw(timestamp) {
+  tickAnimations(timestamp) {
+    for (let i = 0; i < this.animationQueue.length; i++) this.animationQueue[i].tick(timestamp);
+  }
+
+  draw(timestamp = performance.now()) {
+    console.log("drew");
+
     this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
 
+    this.tickAnimations(timestamp);
+
+    // Disable for now
     if (false) {
       this.ctx.strokeStyle = theme.grid;
       this.ctx.lineWidth = 1;
@@ -641,7 +692,7 @@ class Workspace {
 
     this.ctx.restore();
 
-    requestAnimationFrame(this.draw.bind(this));
+    if (this.animationQueue.length) requestAnimationFrame(this.draw.bind(this));
   }
 }
 
@@ -728,7 +779,7 @@ function contextMenu(menu, x, y) {
   list.style.left = finalX + "px";
   list.style.top = finalY + "px";
 
-  // Start animation from the start position regardless of the final menu position
+  // Start animation from the given position regardless of the final menu position
   list.style.transformOrigin = ((x - list.offsetLeft) / rect.width) * 100 + "% " + ((y - list.offsetTop) / rect.height) * 100 + "%";
 
   list.classList.add("appear");
@@ -790,10 +841,10 @@ window.addEventListener("load", () => {
 
     newItem.addEventListener("click", () => {
       c = component.clone();
-      const position = workspace.canvasToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
+      const position = workspace.screenToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
       [c.x, c.y] = [
-        Math.round(position[0] - c.width / 2 / workspace.gridSize) * workspace.gridSize,
-        Math.round(position[1] - c.height / 2 / workspace.gridSize) * workspace.gridSize,
+        Math.round((position[0] - c.width / 2) / workspace.gridSize) * workspace.gridSize,
+        Math.round((position[1] - c.height / 2) / workspace.gridSize) * workspace.gridSize,
       ];
       workspace.components.push(c);
     });

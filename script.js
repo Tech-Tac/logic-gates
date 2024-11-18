@@ -16,7 +16,7 @@ class Slot {
   getIndex(list) {
     // Store the result since it shouldn't change anyway
     if (!this.#cachedIndex) {
-      this._cachedIndex = this.owner[list].indexOf(this);
+      this.#cachedIndex = this.owner[list].indexOf(this);
     }
     return this.#cachedIndex;
   }
@@ -96,10 +96,34 @@ class Connection {
   constructor(source, dest, linePoints) {
     this.sourceOutput = source;
     this.destInput = dest;
-
     this.linePoints = linePoints ?? [];
 
     this.propagate();
+  }
+
+  static draw(ctx, start, end, linePoints, value) {
+    ctx.beginPath();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 10;
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = value ? theme.valueOn : theme.valueOff;
+    ctx.moveTo(...start);
+    for (let i = 0; i < linePoints.length; i++) {
+      ctx.lineTo(...linePoints[i]);
+    }
+    ctx.lineTo(...end);
+
+    ctx.stroke();
+  }
+
+  draw(ctx) {
+    Connection.draw(
+      ctx,
+      this.sourceOutput.owner.getOutputPosition(this.sourceOutput.getIndex()),
+      this.destInput.owner.getInputPosition(this.destInput.getIndex()),
+      this.linePoints,
+      this.sourceOutput.value
+    );
   }
 
   disconnect() {
@@ -255,21 +279,7 @@ class Component {
 
       // Drawing connections
       for (let ci = 0; ci < output.connections.length; ci++) {
-        const connection = output.connections[ci];
-
-        ctx.beginPath();
-        ctx.moveTo(...position);
-
-        for (let i = 0; i < connection.linePoints.length; i++) {
-          ctx.lineTo(...connection.linePoints[i]);
-        }
-        ctx.lineTo(...connection.destInput.owner.getInputPosition(connection.destInput.getIndex()));
-
-        ctx.lineCap = "round";
-        ctx.lineWidth = 10;
-        ctx.lineJoin = "round";
-        ctx.strokeStyle = ctx.fillStyle;
-        ctx.stroke();
+        output.connections[ci].draw(ctx);
       }
     }
   }
@@ -401,11 +411,13 @@ class Workspace {
 
   addComponent(component) {
     component.id = this.components.push(component);
+    this.draw();
   }
 
   removeComponent(component) {
     component.dismember();
     this.components.splice(this.components.indexOf(component), 1);
+    this.draw();
   }
 
   registerAnimation(subject, property, targetValue, length, easingFunc, endCallback) {
@@ -417,6 +429,7 @@ class Workspace {
         endCallback?.();
       })
     );
+    this.draw();
   }
 
   // Unused
@@ -546,9 +559,12 @@ class Workspace {
             this.connectionPoints.push(newPoint); // If not, add a new point there
           }
         }
+
+        this.draw();
       } else if (this.dragging) {
         this.dragging.x += deltaX / this.zoom;
         this.dragging.y += deltaY / this.zoom;
+        this.draw();
       } else if (this.isPanning) {
         this.panX += deltaX / this.zoom;
         this.panY += deltaY / this.zoom;
@@ -556,16 +572,12 @@ class Workspace {
       }
 
       [lastX, lastY] = [e.clientX, e.clientY];
-
-      this.draw();
     });
 
     document.addEventListener("pointerup", (e) => {
       if (this.dragging) {
         this.registerAnimation(this.dragging, "x", Math.round(this.dragging.x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
         this.registerAnimation(this.dragging, "y", Math.round(this.dragging.y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
-        // this.dragging.x = Math.round(this.dragging.x / this.gridSize) * this.gridSize;
-        // this.dragging.y = Math.round(this.dragging.y / this.gridSize) * this.gridSize;
       } else if (this.connectingOutputSlot) {
         let [x, y] = this.screenToWorld(e.offsetX, e.offsetY);
 
@@ -584,6 +596,8 @@ class Workspace {
       this.connectionPoints = [];
       this.isPanning = false;
       this.dragging = null;
+
+      this.draw();
     });
 
     this.ctx.canvas.addEventListener("contextmenu", (e) => {
@@ -671,28 +685,19 @@ class Workspace {
     }
 
     if (this.connectingOutputSlot) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(...this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex()));
-
-      for (let i = 0; i < this.connectionPoints.length; i++) {
-        const point = this.connectionPoints[i];
-        this.ctx.lineTo(...point);
-      }
-
-      const prev = this.connectionPoints[this.connectionPoints.length - 1] ?? this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex());
-
-      this.ctx.lineTo(...(this.connectionPoints.length % 2 ? [prev[0], this._pointerY] : [this._pointerX, prev[1]]));
-
-      this.ctx.lineCap = "round";
-      this.ctx.lineWidth = 10;
-      this.ctx.lineJoin = "round";
-      this.ctx.strokeStyle = this.connectingOutputSlot.value ? theme.valueOn : theme.valueOff;
-      this.ctx.stroke();
+      const last = this.connectionPoints[this.connectionPoints.length - 1] ?? this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex());
+      Connection.draw(
+        this.ctx,
+        this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex()),
+        this.connectionPoints.length % 2 ? [last[0], this._pointerY] : [this._pointerX, last[1]],
+        this.connectionPoints,
+        this.connectingOutputSlot.value
+      );
     }
 
     this.ctx.restore();
 
-    if (this.animationQueue.length) requestAnimationFrame(this.draw.bind(this));
+    if (this.animationQueue.length > 0) requestAnimationFrame(this.draw.bind(this));
   }
 }
 

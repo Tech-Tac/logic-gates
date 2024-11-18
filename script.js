@@ -177,7 +177,7 @@ class Component {
 
   // Returns a duplicate of self
   clone() {
-    const clone = new Component(this.label, this.evaluate, this.inputs.length, this.outputs.length);
+    const clone = new this.constructor(this.label, this.evaluate, this.inputs.length, this.outputs.length);
     clone.x = this.x + this.width;
     clone.y = this.y + this.height;
     return clone;
@@ -311,17 +311,62 @@ class Component {
   }
 }
 
-class CustomComponent extends Component {
-  constructor(name, circuit) {
-    super(name);
-    this.type = "custom";
-    this.circuit = circuit;
+class GlobalInput extends Component {
+  sizing = 32;
+  constructor() {
+    super("input", (inputs) => [inputs[0]], 1, 1);
+    this.width = this.sizing;
+    this.height = this.sizing;
   }
 
-  evaluate(inputs) {}
+  set value(value) {
+    this.inputs[0].setValue(value);
+  }
+
+  getOutputPosition(n) {
+    return [this.x + this.width / 2, this.y + this.height / 2];
+  }
+
+  draw(ctx) {
+    ctx.beginPath();
+    ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.sizing / 2, Math.PI * 0.25, Math.PI * 1.75);
+    ctx.lineTo(this.x + this.width / 2, this.y + this.height / 2);
+    ctx.fillStyle = this.inputs[0].value ? theme.valueOn : theme.valueOff;
+    ctx.fill();
+    for (let i = 0; i < this.outputs[0].connections.length; i++) {
+      this.outputs[0].connections[i].draw(ctx);
+    }
+  }
+}
+
+class GlobalOutput extends Component {
+  sizing = 32;
+  constructor() {
+    super("output", (inputs) => [inputs[0]], 1, 1);
+    this.width = this.sizing;
+    this.height = this.sizing;
+  }
+
+  get value() {
+    return this.outputs[0].value;
+  }
+
+  getInputPosition(n) {
+    return [this.x + this.width / 2, this.y + this.height / 2];
+  }
+
+  draw(ctx) {
+    ctx.beginPath();
+    ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.sizing / 2, Math.PI * 0.75, Math.PI * 1.25, true);
+    ctx.lineTo(this.x + this.width / 2, this.y + this.height / 2);
+    ctx.fillStyle = this.inputs[0].value ? theme.valueOn : theme.valueOff;
+    ctx.fill();
+  }
 }
 
 const defaultComponents = {
+  input: new GlobalInput(),
+  output: new GlobalOutput(),
   is: new Component("is", (inputs) => [inputs[0]], 1),
   and: new Component("and", (inputs) => [inputs.every((b) => b === true)]),
   or: new Component("or", (inputs) => [inputs.some((b) => b === true)]),
@@ -331,6 +376,76 @@ const defaultComponents = {
   nor: new Component("nor", (inputs) => [inputs.every((b) => b === false)]),
   xnor: new Component("xnor", (inputs) => [!(inputs.indexOf(true) === inputs.lastIndexOf(true) && inputs.indexOf(true) !== -1)]),
 };
+
+class Circuit {
+  inputs = [];
+  outputs = [];
+
+  /**
+   * All components in the workspace
+   * @type {Component[]}
+   */
+  components = [];
+
+  constructor() {}
+
+  addComponent(component) {
+    component.id = this.components.push(component);
+    if (component.type === "input") this.inputs.push(component);
+    else if (component.type === "output") this.outputs.push(component);
+  }
+
+  removeComponent(component) {
+    component.dismember();
+    this.components.splice(this.components.indexOf(component), 1);
+    if (component.type === "input") this.inputs.splice(this.components.indexOf(component), 1);
+    else if (component.type === "output") this.outputs.splice(this.components.indexOf(component), 1);
+  }
+
+  process(inputs = []) {
+    for (let i = 0; i < this.inputs.length; i++) {
+      if (inputs[i] !== undefined) this.inputs[i].value = inputs[i];
+      this.inputs[i].propagateOutputs();
+    }
+    return this.outputs.map((o) => o.outputs[0].value);
+  }
+
+  clone() {
+    const result = new Circuit();
+    const map = new WeakMap();
+    for (let i = 0; i < this.components.length; i++) {
+      const component = this.components[i];
+      const copy = component.clone();
+      map.set(component, copy);
+      result.addComponent(copy);
+    }
+
+    for (let c = 0; c < this.components.length; c++) {
+      const component = this.components[c];
+      for (let o = 0; o < component.outputs.length; o++) {
+        const output = component.outputs[o];
+        for (let n = 0; n < output.connections.length; n++) {
+          const connection = output.connections[n];
+          map.get(component).outputs[o].connectTo(map.get(connection.destInput.owner).inputs[connection.destInput.getIndex()]);
+        }
+      }
+    }
+
+    return result;
+  }
+}
+
+class CustomComponent extends Component {
+  constructor(label, circuit) {
+    super(label, () => {}, circuit.inputs.length, circuit.outputs.length);
+    this.circuit = circuit.clone();
+    this.evaluate = (inputs) => this.circuit.process(inputs);
+    this.type = "custom";
+  }
+  clone() {
+    return new CustomComponent(this.label, this.circuit);
+  }
+}
 
 class EasedAnimation {
   constructor(subject, property, targetValue, length, easingFunc = (t) => t, endCallback = () => {}) {
@@ -355,18 +470,11 @@ class EasedAnimation {
   }
 }
 
-class Workspace {
-  inputs = [];
-
-  outputs = [];
-
-  /**
-   * All components in the workspace
-   * @type {Component[]}
-   */
-  components = [];
-
+class Workspace extends Circuit {
   scale = devicePixelRatio || 1;
+
+  showGrid = true;
+  gridMode = "CSS";
 
   zoom = 1;
   panX = 0;
@@ -405,19 +513,9 @@ class Workspace {
   _pointerY = 0;
 
   constructor(canvas) {
+    super();
     this.ctx = canvas.getContext("2d");
     this.initializeCanvas();
-  }
-
-  addComponent(component) {
-    component.id = this.components.push(component);
-    this.draw();
-  }
-
-  removeComponent(component) {
-    component.dismember();
-    this.components.splice(this.components.indexOf(component), 1);
-    this.draw();
   }
 
   registerAnimation(subject, property, targetValue, length, easingFunc, endCallback) {
@@ -440,11 +538,6 @@ class Workspace {
     ];
   }
 
-  // No screen scaling calculations
-  canvasToWorld(x, y) {
-    return [(x - this.ctx.canvas.width / 2 - this.panX * this.zoom) / this.zoom, (y - this.ctx.canvas.height / 2 - this.panY * this.zoom) / this.zoom];
-  }
-
   screenToWorld(x, y) {
     return [(x * this.scale - this.ctx.canvas.width / 2 - this.panX * this.zoom) / this.zoom, (y * this.scale - this.ctx.canvas.height / 2 - this.panY * this.zoom) / this.zoom];
   }
@@ -454,8 +547,8 @@ class Workspace {
     for (let i = this.components.length - 1; i >= 0; i--) {
       const c = this.components[i];
 
-      const inputMargin = 8 * (c.inputs.length > 0);
-      const outputMargin = 8 * (c.outputs.length > 0);
+      const inputMargin = slotMargin * (c.inputs.length > 0);
+      const outputMargin = slotMargin * (c.outputs.length > 0);
 
       if (x >= c.x - inputMargin && x <= c.x + c.width + outputMargin && y >= c.y && y <= c.y + c.height) {
         return c;
@@ -484,10 +577,13 @@ class Workspace {
       updateGrid();
     };
 
-    this.zoom *= this.scale;
+    this.zoom = this.scale;
 
     resizeCanvas();
     updateGrid();
+
+    const mQuery = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    mQuery.addEventListener("change", resizeCanvas);
 
     window.addEventListener("resize", resizeCanvas.bind(this));
 
@@ -628,8 +724,8 @@ class Workspace {
           },
           {
             text: "Convert to Component",
-            action: () => {},
-            disabled: true,
+            action: () => this.components.push(new CustomComponent("Custom", this)),
+            // disabled: true,
           },
           {
             divider: true,
@@ -650,14 +746,12 @@ class Workspace {
   }
 
   draw(timestamp = performance.now()) {
-    console.log("drew");
-
     this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
 
     this.tickAnimations(timestamp);
 
     // Disable for now
-    if (false) {
+    if (this.gridMode === "Canvas") {
       this.ctx.strokeStyle = theme.grid;
       this.ctx.lineWidth = 1;
 
@@ -838,7 +932,7 @@ window.addEventListener("load", () => {
       if (isGrabbing) {
         isGrabbing = false;
         const c = component.clone();
-        workspace.components.push(c);
+        workspace.addComponent(c);
         [c.x, c.y] = workspace.screenToWorld(e.clientX - (c.width / 2) * workspace.zoom, e.clientY - (c.height / 2) * workspace.zoom);
         workspace.dragging = c;
       }
@@ -851,7 +945,7 @@ window.addEventListener("load", () => {
         Math.round((position[0] - c.width / 2) / workspace.gridSize) * workspace.gridSize,
         Math.round((position[1] - c.height / 2) / workspace.gridSize) * workspace.gridSize,
       ];
-      workspace.components.push(c);
+      workspace.addComponent(c);
     });
 
     newItem.addEventListener("contextmenu", (e) => {

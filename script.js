@@ -177,10 +177,7 @@ class Component {
 
   // Returns a duplicate of self
   clone() {
-    const clone = new this.constructor(this.label, this.evaluate, this.inputs.length, this.outputs.length);
-    clone.x = this.x + this.width;
-    clone.y = this.y + this.height;
-    return clone;
+    return new this.constructor(this.label, this.evaluate, this.inputs.length, this.outputs.length);
   }
 
   /**
@@ -456,17 +453,25 @@ class EasedAnimation {
     this.startTime = performance.now();
     this.length = length;
     this.easingFunc = easingFunc;
-    this.endCallback = endCallback;
+    this.endCallback = endCallback ?? (() => {});
   }
 
   tick(timestamp = performance.now()) {
     const time = timestamp - this.startTime;
     if (time > this.length) {
-      this.subject[this.property] = this.targetValue;
-      this.endCallback?.();
+      this.finish();
       return;
     }
     this.subject[this.property] = this.initialValue + this.easingFunc(time / this.length) * (this.targetValue - this.initialValue);
+  }
+
+  abort() {
+    this.subject[this.property] = this.initialValue;
+  }
+
+  finish() {
+    this.subject[this.property] = this.targetValue;
+    this.endCallback?.();
   }
 }
 
@@ -543,7 +548,7 @@ class Workspace extends Circuit {
   }
 
   getComponentAt(x, y) {
-    const slotMargin = 8;
+    const slotMargin = 10;
     for (let i = this.components.length - 1; i >= 0; i--) {
       const c = this.components[i];
 
@@ -556,6 +561,9 @@ class Workspace extends Circuit {
     }
   }
 
+  /**
+   * Adds event listeners and readies the canvas
+   */
   initializeCanvas() {
     // Scale everything by the CSS pixel ratio to make the canvas crisp on high DPI screens
     this.scale = devicePixelRatio || 1;
@@ -619,9 +627,12 @@ class Workspace extends Circuit {
             targetInput.toggle();
           }
           this.draw();
-        } else if (relativeX > target.width - 12) {
+        } else if (relativeX > target.width - 12 && target.type !== "output") {
           this.connectingOutputSlot = target.getOutputAtY(relativeY);
         } else {
+          this.dragging = target;
+        }
+        if ((target.type === "input" || target.type === "output") && !this.connectingOutputSlot) {
           this.dragging = target;
         }
       } else {
@@ -671,14 +682,12 @@ class Workspace extends Circuit {
     });
 
     document.addEventListener("pointerup", (e) => {
-      if (this.dragging) {
-        this.registerAnimation(this.dragging, "x", Math.round(this.dragging.x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
-        this.registerAnimation(this.dragging, "y", Math.round(this.dragging.y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
-      } else if (this.connectingOutputSlot) {
+      if (this.connectingOutputSlot) {
         let [x, y] = this.screenToWorld(e.offsetX, e.offsetY);
 
         const target = this.getComponentAt(x, y);
-        if (target && target !== this.connectingOutputSlot.owner) {
+
+        if (target && target !== this.connectingOutputSlot.owner && target.type !== "input") {
           const relativeY = y - target.y;
           const targetInput = target.getInputAtY(relativeY);
 
@@ -686,6 +695,9 @@ class Workspace extends Circuit {
             this.connectingOutputSlot.connectTo(targetInput, this.connectionPoints);
           }
         }
+      } else if (this.dragging) {
+        this.registerAnimation(this.dragging, "x", Math.round(this.dragging.x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+        this.registerAnimation(this.dragging, "y", Math.round(this.dragging.y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
       }
 
       this.connectingOutputSlot = null;
@@ -724,8 +736,12 @@ class Workspace extends Circuit {
           },
           {
             text: "Convert to Component",
-            action: () => this.components.push(new CustomComponent("Custom", this)),
-            // disabled: true,
+            action: () => {
+              const component = new CustomComponent(prompt("Component name:", "custom"), this);
+              this.addComponent(component);
+              registerComponent(component);
+            },
+            disabled: this.inputs.length < 1 || this.outputs.length < 1,
           },
           {
             divider: true,
@@ -888,9 +904,51 @@ const canvas = document.getElementById("mainCanvas");
 const workspace = new Workspace(canvas);
 const palette = document.querySelector(".palette");
 
-window.addEventListener("load", () => {
-  let isGrabbing = false;
+function registerComponent(component) {
+  const newItem = document.createElement("img");
+  newItem.draggable = false;
+  newItem.classList.add("palette-item");
+  newItem.alt = newItem.title = component.label;
 
+  newItem.src = component.getSelfPortrait();
+
+  isGrabbing = false;
+  newItem.addEventListener("pointerdown", (e) => {
+    isGrabbing = true;
+  });
+
+  document.addEventListener("pointerup", () => {
+    isGrabbing = false;
+  });
+
+  newItem.addEventListener("pointerleave", (e) => {
+    if (isGrabbing) {
+      isGrabbing = false;
+      const c = component.clone();
+      workspace.addComponent(c);
+      [c.x, c.y] = workspace.screenToWorld(e.clientX - (c.width / 2) * workspace.zoom, e.clientY - (c.height / 2) * workspace.zoom);
+      workspace.dragging = c;
+    }
+  });
+
+  newItem.addEventListener("click", () => {
+    c = component.clone();
+    const position = workspace.screenToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
+    [c.x, c.y] = [
+      Math.round((position[0] - c.width / 2) / workspace.gridSize) * workspace.gridSize,
+      Math.round((position[1] - c.height / 2) / workspace.gridSize) * workspace.gridSize,
+    ];
+    workspace.addComponent(c);
+  });
+
+  newItem.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+  });
+
+  palette.appendChild(newItem);
+}
+
+function initializePalette() {
   palette.addEventListener("pointerup", function () {
     if (workspace.dragging) {
       workspace.removeComponent(workspace.dragging);
@@ -911,49 +969,9 @@ window.addEventListener("load", () => {
     }
   });
 
-  document.addEventListener("pointerup", () => {
-    isGrabbing = false;
-  });
+  for (const key in defaultComponents) registerComponent(defaultComponents[key]);
+}
 
-  for (const key in defaultComponents) {
-    const component = defaultComponents[key];
-    const newItem = document.createElement("img");
-    newItem.draggable = false;
-    newItem.classList.add("palette-item");
-    newItem.alt = newItem.title = component.label;
-
-    newItem.src = component.getSelfPortrait();
-
-    newItem.addEventListener("pointerdown", (e) => {
-      isGrabbing = true;
-    });
-
-    newItem.addEventListener("pointerleave", (e) => {
-      if (isGrabbing) {
-        isGrabbing = false;
-        const c = component.clone();
-        workspace.addComponent(c);
-        [c.x, c.y] = workspace.screenToWorld(e.clientX - (c.width / 2) * workspace.zoom, e.clientY - (c.height / 2) * workspace.zoom);
-        workspace.dragging = c;
-      }
-    });
-
-    newItem.addEventListener("click", () => {
-      c = component.clone();
-      const position = workspace.screenToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
-      [c.x, c.y] = [
-        Math.round((position[0] - c.width / 2) / workspace.gridSize) * workspace.gridSize,
-        Math.round((position[1] - c.height / 2) / workspace.gridSize) * workspace.gridSize,
-      ];
-      workspace.addComponent(c);
-    });
-
-    newItem.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-    });
-
-    palette.appendChild(newItem);
-  }
-});
+window.addEventListener("load", initializePalette);
 
 workspace.draw();

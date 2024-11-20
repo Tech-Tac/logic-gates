@@ -912,33 +912,27 @@ function registerComponent(component) {
 
   newItem.src = component.getSelfPortrait();
 
-  isGrabbing = false;
+  let instance;
+
   newItem.addEventListener("pointerdown", (e) => {
-    isGrabbing = true;
+    palette.draggedInstance = instance = component.clone();
+    workspace.addComponent(instance);
+    [instance.x, instance.y] = workspace.screenToWorld(e.clientX - (instance.width / 2) * workspace.zoom, e.clientY - (instance.height / 2) * workspace.zoom);
+    workspace.dragging = instance;
+    palette.classList.remove("open");
   });
 
-  document.addEventListener("pointerup", () => {
-    isGrabbing = false;
-  });
-
-  newItem.addEventListener("pointerleave", (e) => {
-    if (isGrabbing) {
-      isGrabbing = false;
-      const c = component.clone();
-      workspace.addComponent(c);
-      [c.x, c.y] = workspace.screenToWorld(e.clientX - (c.width / 2) * workspace.zoom, e.clientY - (c.height / 2) * workspace.zoom);
-      workspace.dragging = c;
+  newItem.addEventListener("pointerleave", () => {
+    if (instance !== undefined) {
+      palette.draggedInstance = instance = undefined;
     }
   });
 
-  newItem.addEventListener("click", () => {
-    c = component.clone();
+  newItem.addEventListener("pointerup", () => {
+    if (instance === undefined) return;
     const position = workspace.screenToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
-    [c.x, c.y] = [
-      Math.round((position[0] - c.width / 2) / workspace.gridSize) * workspace.gridSize,
-      Math.round((position[1] - c.height / 2) / workspace.gridSize) * workspace.gridSize,
-    ];
-    workspace.addComponent(c);
+    instance.x = Math.round(position[0] - instance.width / 2 / workspace.gridSize) * workspace.gridSize;
+    instance.y = Math.round(position[1] - instance.height / 2 / workspace.gridSize) * workspace.gridSize;
   });
 
   newItem.addEventListener("contextmenu", (e) => {
@@ -950,12 +944,15 @@ function registerComponent(component) {
 
 function initializePalette() {
   palette.addEventListener("pointerup", function () {
-    if (workspace.dragging) {
+    if (workspace.dragging && palette.draggedInstance === undefined) {
       workspace.removeComponent(workspace.dragging);
       workspace.dragging = undefined;
-      this.classList.remove("danger");
     }
+    palette.draggedInstance = undefined;
+    this.classList.remove("danger");
   });
+
+  document.addEventListener("pointerup", () => palette.classList.remove("closed"));
 
   palette.addEventListener("pointerenter", function () {
     if (workspace.dragging) {
@@ -970,6 +967,11 @@ function initializePalette() {
   });
 
   for (const key in defaultComponents) registerComponent(defaultComponents[key]);
+  const shelf = document.createElement("div");
+  shelf.className = "shelf";
+  palette.prepend(shelf);
+  shelf.appendChild(palette.children[1]);
+  shelf.appendChild(palette.children[1]);
 }
 
 window.addEventListener("load", initializePalette);

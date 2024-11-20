@@ -34,8 +34,8 @@ body {
   position: absolute;
   height: 100%;
   top: 0;
-  left: -170pt;
-  width: 192pt;
+  left: -170px;
+  width: 192px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -44,6 +44,7 @@ body {
   gap: 8pt;
   padding: 12pt 8pt;
   scrollbar-gutter: stable both-edges;
+  touch-action: pan-y;
   opacity: 0;
   background-color: #8884;
   box-shadow: 0 0 16pt #0006;
@@ -56,7 +57,23 @@ body {
   scrollbar-width: thin;
 }
 
-.palette:hover {
+.palette .shelf {
+  display: flex;
+  flex-wrap: nowrap;
+  flex-direction: row;
+  justify-content: space-around;
+  align-items: center;
+  width: 100%;
+  height: min-content;
+}
+
+.palette .shelf .palette-item {
+  padding: 0;
+  width: 50%;
+}
+
+.palette:not(.closed):hover,
+.palette.open {
   left: 0;
   opacity: 1;
 }
@@ -70,7 +87,6 @@ body {
   -webkit-user-drag: none;
   -moz-user-drag: none;
   padding: 8pt;
-  text-align: center;
   transition: scale 100ms;
 }
 

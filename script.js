@@ -386,10 +386,12 @@ class Circuit {
 
   constructor() {}
 
-  addComponent(component) {
+  addComponent(component, x, y) {
     component.id = this.components.push(component);
     if (component.type === "input") this.inputs.push(component);
     else if (component.type === "output") this.outputs.push(component);
+    component.x = x ?? 0;
+    component.y = y ?? 0;
   }
 
   removeComponent(component) {
@@ -742,6 +744,10 @@ class Workspace extends Circuit {
               registerComponent(component);
             },
             disabled: this.inputs.length < 1 || this.outputs.length < 1,
+          },
+          {
+            text: "Clear",
+            action: () => (this.components = this.inputs = this.outputs = []),
           },
           {
             divider: true,

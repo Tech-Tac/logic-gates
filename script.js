@@ -1,22 +1,21 @@
 class Slot {
   /**
-   * The Father.
    * @type {Component}
    */
-  owner;
+  parentComponent;
 
   value = false;
 
   #cachedIndex;
 
-  constructor(owner) {
-    this.owner = owner;
+  constructor(component) {
+    this.parentComponent = component;
   }
 
   getIndex(list) {
     // Store the result since it shouldn't change anyway
     if (!this.#cachedIndex) {
-      this.#cachedIndex = this.owner[list].indexOf(this);
+      this.#cachedIndex = this.parentComponent[list].indexOf(this);
     }
     return this.#cachedIndex;
   }
@@ -28,8 +27,8 @@ class InputSlot extends Slot {
    */
   connection;
 
-  constructor(owner) {
-    super(owner);
+  constructor(component) {
+    super(component);
   }
 
   getIndex() {
@@ -42,7 +41,7 @@ class InputSlot extends Slot {
 
   setValue(state) {
     this.value = state;
-    this.owner.updateAndPropagate();
+    this.parentComponent.updateAndPropagate();
   }
 }
 
@@ -53,8 +52,8 @@ class OutputSlot extends Slot {
    */
   connections = [];
 
-  constructor(owner) {
-    super(owner);
+  constructor(component) {
+    super(component);
   }
 
   getIndex() {
@@ -68,9 +67,9 @@ class OutputSlot extends Slot {
   }
 
   // Makes a new mutual connection between the slots
-  connectTo(targetInput, linePoints) {
+  connectTo(targetInput, pathPoints) {
     if (targetInput.connection) targetInput.connection.disconnect();
-    this.connections.push((targetInput.connection = new Connection(this, targetInput, linePoints)));
+    this.connections.push((targetInput.connection = new Connection(this, targetInput, pathPoints)));
   }
 }
 
@@ -101,15 +100,15 @@ class Connection {
     this.propagate();
   }
 
-  static draw(ctx, start, end, linePoints, value) {
+  static draw(ctx, start, end, pathPoints, value) {
     ctx.beginPath();
     ctx.lineCap = "round";
     ctx.lineWidth = 10;
     ctx.lineJoin = "round";
     ctx.strokeStyle = value ? theme.valueOn : theme.valueOff;
     ctx.moveTo(...start);
-    for (let i = 0; i < linePoints.length; i++) {
-      ctx.lineTo(...linePoints[i]);
+    for (let i = 0; i < pathPoints.length; i++) {
+      ctx.lineTo(...pathPoints[i]);
     }
     ctx.lineTo(...end);
 
@@ -119,8 +118,8 @@ class Connection {
   draw(ctx) {
     Connection.draw(
       ctx,
-      this.sourceOutput.owner.getOutputPosition(this.sourceOutput.getIndex()),
-      this.destInput.owner.getInputPosition(this.destInput.getIndex()),
+      this.sourceOutput.parentComponent.getOutputPosition(this.sourceOutput.getIndex()),
+      this.destInput.parentComponent.getInputPosition(this.destInput.getIndex()),
       this.linePoints,
       this.sourceOutput.value
     );
@@ -136,7 +135,7 @@ class Connection {
     const oldValue = this.destInput.value;
     if (this.sourceOutput.value !== oldValue) {
       this.destInput.value = this.sourceOutput.value;
-      this.destInput.owner.updateAndPropagate();
+      this.destInput.parentComponent.updateAndPropagate();
     }
   }
 }
@@ -283,7 +282,7 @@ class Component {
 
   /**
    * Renders an image of the component
-   * @param {Number} resolution the maximum image dimension length
+   * @param {Number} resolution the minimum image dimension length
    * @returns {String} data url of the image
    */
   getSelfPortrait(resolution = 256) {
@@ -292,8 +291,8 @@ class Component {
 
     const ratio = (this.width + 16) / this.height;
 
-    canvas.width = Math.min(resolution, resolution * ratio);
-    canvas.height = Math.min(resolution / ratio, resolution);
+    canvas.width = Math.max(resolution, resolution * ratio);
+    canvas.height = Math.max(resolution, resolution / ratio);
 
     ctx.scale(canvas.width / (this.width + 16), canvas.height / this.height);
     ctx.translate(8, 0);
@@ -425,12 +424,16 @@ class Circuit {
         const output = component.outputs[o];
         for (let n = 0; n < output.connections.length; n++) {
           const connection = output.connections[n];
-          map.get(component).outputs[o].connectTo(map.get(connection.destInput.owner).inputs[connection.destInput.getIndex()]);
+          map.get(component).outputs[o].connectTo(map.get(connection.destInput.parentComponent).inputs[connection.destInput.getIndex()]);
         }
       }
     }
 
     return result;
+  }
+
+  toCustomComponent(name) {
+    return new CustomComponent(name, this);
   }
 }
 
@@ -477,7 +480,126 @@ class EasedAnimation {
   }
 }
 
+class Command {
+  constructor() {}
+  execute() {}
+  reverse() {}
+}
+
+class HistoryManager {
+  /**
+   * @type {Command[]}
+   */
+  undoStack = [];
+
+  /**
+   * @type {Command[]}
+   */
+  redoStack = [];
+
+  constructor() {}
+
+  execute(command) {
+    command.execute();
+    this.undoStack.push(command);
+    this.redoStack = [];
+  }
+
+  undo() {
+    if (this.undoStack.length > 0) {
+      const command = this.undoStack.pop();
+      command.reverse();
+      this.redoStack.push(command);
+    }
+  }
+
+  redo() {
+    if (this.redoStack.length > 0) {
+      const command = this.redoStack.pop();
+      command.execute();
+      this.undoStack.push(command);
+    }
+  }
+}
+
+class AddComponentCommand extends Command {
+  constructor(workspace, component, x, y) {
+    super();
+    this.workspace = workspace;
+    this.component = component;
+    this.x = x;
+    this.y = y;
+  }
+
+  execute() {
+    workspace.addComponent(this.component, this.x, this.y);
+  }
+
+  reverse() {
+    workspace.removeComponent(this.component);
+  }
+}
+
+class RemoveComponentCommand extends Command {
+  constructor(workspace, component) {
+    super();
+    this.workspace = workspace;
+    this.component = component;
+    this.x = x;
+    this.y = y;
+  }
+
+  execute() {
+    workspace.addComponent(this.component, this.x, this.y);
+  }
+
+  reverse() {
+    workspace.removeComponent(this.component);
+  }
+}
+
+class MoveComponentCommand extends Command {
+  constructor(workspace, component, toX, toY, fromX, fromY) {
+    super();
+    this.workspace = workspace;
+    this.component = component;
+    this.fromX = fromX ?? component.x;
+    this.fromY = fromY ?? component.y;
+    this.toX = toX;
+    this.toY = toY;
+  }
+
+  execute() {
+    this.workspace.moveComponent(this.component, this.toX, this.toY);
+  }
+
+  reverse() {
+    this.workspace.moveComponent(this.component, this.fromX, this.fromY);
+    console.log("reversed");
+  }
+}
+
+class ConnectCommand extends Command {
+  constructor(sourceOutput, destInput, path) {
+    super();
+    this.outputSlot = sourceOutput;
+    this.destInput = destInput;
+    this.path = path;
+  }
+
+  execute() {
+    this.outputSlot.connectTo(this.destInput, this.path);
+    this.connection = this.destInput.connection;
+  }
+
+  reverse() {
+    this.connection.disconnect();
+  }
+}
+
 class Workspace extends Circuit {
+  history = new HistoryManager();
+
   scale = devicePixelRatio || 1;
 
   showGrid = true;
@@ -495,7 +617,7 @@ class Workspace extends Circuit {
    * The component currently being dragged
    * @type {Component}
    */
-  dragging = null;
+  draggedComponent = null;
 
   /**
    * The output currently being dragged and connected
@@ -503,7 +625,7 @@ class Workspace extends Circuit {
    */
   connectingOutputSlot = null;
 
-  connectionPoints = [];
+  connectingPath = [];
 
   /**
    * Canvas rendering context
@@ -525,7 +647,7 @@ class Workspace extends Circuit {
     this.initializeCanvas();
   }
 
-  registerAnimation(subject, property, targetValue, length, easingFunc, endCallback) {
+  animate(subject, property, targetValue, length, easingFunc, endCallback) {
     const that = this;
     this.animationQueue.push(
       new EasedAnimation(subject, property, targetValue, length, easingFunc, function () {
@@ -534,7 +656,7 @@ class Workspace extends Circuit {
         endCallback?.();
       })
     );
-    this.draw();
+    this.draw(performance.now(), true);
   }
 
   // Unused
@@ -561,6 +683,22 @@ class Workspace extends Circuit {
         return c;
       }
     }
+  }
+
+  addComponent(...args) {
+    super.addComponent(...args);
+    this.draw();
+  }
+
+  removeComponent(...args) {
+    super.removeComponent(...args);
+    this.draw();
+  }
+
+  moveComponent(component, x, y) {
+    this.animate(component, "x", Math.round(x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+    this.animate(component, "y", Math.round(y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+    console.log("Moved component");
   }
 
   /**
@@ -610,6 +748,9 @@ class Workspace extends Circuit {
     let lastX = 0;
     let lastY = 0;
 
+    let dragStartX = 0;
+    let dragStartY = 0;
+
     this.ctx.canvas.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
 
@@ -632,10 +773,12 @@ class Workspace extends Circuit {
         } else if (relativeX > target.width - 12 && target.type !== "output") {
           this.connectingOutputSlot = target.getOutputAtY(relativeY);
         } else {
-          this.dragging = target;
+          this.draggedComponent = target;
+          dragStartX = target.x;
+          dragStartY = target.y;
         }
         if ((target.type === "input" || target.type === "output") && !this.connectingOutputSlot) {
-          this.dragging = target;
+          this.draggedComponent = target;
         }
       } else {
         this.isPanning = true;
@@ -651,28 +794,28 @@ class Workspace extends Circuit {
       const [deltaX, deltaY] = [(e.clientX - lastX) * this.scale, (e.clientY - lastY) * this.scale];
 
       if (this.connectingOutputSlot) {
-        const origin = this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex());
-        const last = this.connectionPoints[this.connectionPoints.length - 1] ?? origin;
+        const origin = this.connectingOutputSlot.parentComponent.getOutputPosition(this.connectingOutputSlot.getIndex());
+        const last = this.connectingPath[this.connectingPath.length - 1] ?? origin;
 
-        const axis = this.connectionPoints.length % 2 ? 1 : 0;
-        const comp = this.connectionPoints.length % 2 ? 0 : 1; // Complementary - perpendicular axis
+        const axis = this.connectingPath.length % 2 ? 1 : 0;
+        const comp = this.connectingPath.length % 2 ? 0 : 1; // Complementary - perpendicular axis
 
         // Add a point when the cursor takes a 90-degree turn
         if (Math.abs(point[comp] - last[comp]) >= this.gridSize * 0.75) {
           const newPoint = new Array(2);
           newPoint[axis] = Math.round(point[axis] / this.gridSize) * this.gridSize;
           newPoint[comp] = last[comp];
-          if (last[axis] === newPoint[axis] && this.connectionPoints.length > 0) {
-            this.connectionPoints.pop(); // Remove the last point if the cursor backtracks to it again
+          if (last[axis] === newPoint[axis] && this.connectingPath.length > 0) {
+            this.connectingPath.pop(); // Remove the last point if the cursor backtracks to it again
           } else {
-            this.connectionPoints.push(newPoint); // If not, add a new point there
+            this.connectingPath.push(newPoint); // If not, add a new point there
           }
         }
 
         this.draw();
-      } else if (this.dragging) {
-        this.dragging.x += deltaX / this.zoom;
-        this.dragging.y += deltaY / this.zoom;
+      } else if (this.draggedComponent) {
+        this.draggedComponent.x += deltaX / this.zoom;
+        this.draggedComponent.y += deltaY / this.zoom;
         this.draw();
       } else if (this.isPanning) {
         this.panX += deltaX / this.zoom;
@@ -689,30 +832,39 @@ class Workspace extends Circuit {
 
         const target = this.getComponentAt(x, y);
 
-        if (target && target !== this.connectingOutputSlot.owner && target.type !== "input") {
+        if (target && target !== this.connectingOutputSlot.parentComponent && target.type !== "input") {
           const relativeY = y - target.y;
           const targetInput = target.getInputAtY(relativeY);
 
           if (targetInput) {
-            this.connectingOutputSlot.connectTo(targetInput, this.connectionPoints);
+            this.history.execute(new ConnectCommand(this.connectingOutputSlot, targetInput, this.connectingPath));
           }
         }
-      } else if (this.dragging) {
-        this.registerAnimation(this.dragging, "x", Math.round(this.dragging.x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
-        this.registerAnimation(this.dragging, "y", Math.round(this.dragging.y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+      } else if (this.draggedComponent) {
+        const pos = [Math.round(this.draggedComponent.x / this.gridSize) * this.gridSize, Math.round(this.draggedComponent.y / this.gridSize) * this.gridSize];
+        if (this.draggedComponent.new) {
+          this.moveComponent(this.draggedComponent, ...pos);
+          this.draggedComponent.createCommand.x = pos[0];
+          this.draggedComponent.createCommand.y = pos[1];
+          delete this.draggedComponent.new;
+          delete this.draggedComponent.createCommand;
+        } else {
+          this.history.execute(new MoveComponentCommand(this, this.draggedComponent, pos[0], pos[1], dragStartX, dragStartY));
+        }
       }
 
       this.connectingOutputSlot = null;
-      this.connectionPoints = [];
+      this.connectingPath = [];
       this.isPanning = false;
-      this.dragging = null;
+      this.draggedComponent = null;
 
       this.draw();
     });
 
     this.ctx.canvas.addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      const targetComponent = this.getComponentAt(...this.screenToWorld(e.clientX, e.clientY));
+      const point = this.screenToWorld(e.clientX, e.clientY);
+      const targetComponent = this.getComponentAt(...point);
       if (targetComponent) {
         const menu = [
           {
@@ -735,15 +887,28 @@ class Workspace extends Circuit {
             text: "Save",
             hint: "ctrl + s",
             action: () => {},
+            disabled: true, // Not yet implemented
           },
           {
             text: "Convert to Component",
             action: () => {
-              const component = new CustomComponent(prompt("Component name:", "custom"), this);
-              this.addComponent(component);
+              const component = this.toCustomComponent(prompt("Component name:", "custom"));
               registerComponent(component);
+              this.history.execute(new AddComponentCommand(this, component, ...point));
             },
             disabled: this.inputs.length < 1 || this.outputs.length < 1,
+          },
+          {
+            text: "Undo",
+            hint: "ctrl + z",
+            action: () => this.history.undo(),
+            disabled: this.history.undoStack.length === 0,
+          },
+          {
+            text: "Redo",
+            hint: "ctrl + y",
+            action: () => this.history.redo(),
+            disabled: this.history.redoStack.length === 0,
           },
           {
             text: "Clear",
@@ -761,18 +926,42 @@ class Workspace extends Circuit {
         contextMenu(menu, e.clientX, e.clientY);
       }
     });
+
+    const keyBinds = {
+      "ctrl+z": () => this.history.undo(),
+      "ctrl+y": () => this.history.redo(),
+    };
+
+    document.addEventListener("keydown", (e) => {
+      for (const keyCombo in keyBinds) {
+        const keys = keyCombo.split("+");
+
+        if (
+          (e.ctrlKey && !keys.includes("ctrl")) ||
+          (e.shiftKey && !keys.includes("shift")) ||
+          (e.altKey && !keys.includes("alt")) ||
+          (e.metaKey && !keys.includes("win")) ||
+          !keys.includes(e.key)
+        ) {
+          continue;
+        }
+
+        e.preventDefault();
+        keyBinds[keyCombo]();
+        this.draw();
+      }
+    });
   }
 
   tickAnimations(timestamp) {
     for (let i = 0; i < this.animationQueue.length; i++) this.animationQueue[i].tick(timestamp);
   }
 
-  draw(timestamp = performance.now()) {
+  draw(timestamp = performance.now(), loop = false) {
     this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
 
     this.tickAnimations(timestamp);
 
-    // Disable for now
     if (this.gridMode === "Canvas") {
       this.ctx.strokeStyle = theme.grid;
       this.ctx.lineWidth = 1;
@@ -801,19 +990,19 @@ class Workspace extends Circuit {
     }
 
     if (this.connectingOutputSlot) {
-      const last = this.connectionPoints[this.connectionPoints.length - 1] ?? this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex());
+      const last = this.connectingPath[this.connectingPath.length - 1] ?? this.connectingOutputSlot.parentComponent.getOutputPosition(this.connectingOutputSlot.getIndex());
       Connection.draw(
         this.ctx,
-        this.connectingOutputSlot.owner.getOutputPosition(this.connectingOutputSlot.getIndex()),
-        this.connectionPoints.length % 2 ? [last[0], this._pointerY] : [this._pointerX, last[1]],
-        this.connectionPoints,
+        this.connectingOutputSlot.parentComponent.getOutputPosition(this.connectingOutputSlot.getIndex()),
+        this.connectingPath.length % 2 ? [last[0], this._pointerY] : [this._pointerX, last[1]],
+        this.connectingPath,
         this.connectingOutputSlot.value
       );
     }
 
     this.ctx.restore();
 
-    if (this.animationQueue.length > 0) requestAnimationFrame(this.draw.bind(this));
+    if (this.animationQueue.length > 0 && loop) requestAnimationFrame(() => this.draw(performance.now(), true));
   }
 }
 
@@ -922,9 +1111,15 @@ function registerComponent(component) {
 
   newItem.addEventListener("pointerdown", (e) => {
     palette.draggedInstance = instance = component.clone();
-    workspace.addComponent(instance);
-    [instance.x, instance.y] = workspace.screenToWorld(e.clientX - (instance.width / 2) * workspace.zoom, e.clientY - (instance.height / 2) * workspace.zoom);
-    workspace.dragging = instance;
+    const command = new AddComponentCommand(
+      workspace,
+      instance,
+      ...workspace.screenToWorld(e.clientX - (instance.width / 2) * workspace.zoom, e.clientY - (instance.height / 2) * workspace.zoom)
+    );
+    instance.new = true;
+    instance.createCommand = command;
+    workspace.history.execute(command);
+    workspace.draggedComponent = instance;
     palette.classList.remove("open");
   });
 
@@ -950,9 +1145,9 @@ function registerComponent(component) {
 
 function initializePalette() {
   palette.addEventListener("pointerup", function () {
-    if (workspace.dragging && palette.draggedInstance === undefined) {
-      workspace.removeComponent(workspace.dragging);
-      workspace.dragging = undefined;
+    if (workspace.draggedComponent && palette.draggedInstance === undefined) {
+      workspace.removeComponent(workspace.draggedComponent);
+      workspace.draggedComponent = undefined;
     }
     palette.draggedInstance = undefined;
     this.classList.remove("danger");
@@ -961,13 +1156,13 @@ function initializePalette() {
   document.addEventListener("pointerup", () => palette.classList.remove("closed"));
 
   palette.addEventListener("pointerenter", function () {
-    if (workspace.dragging) {
+    if (workspace.draggedComponent) {
       this.classList.add("danger");
     }
   });
 
   palette.addEventListener("pointerleave", function () {
-    if (workspace.dragging) {
+    if (workspace.draggedComponent) {
       this.classList.remove("danger");
     }
   });

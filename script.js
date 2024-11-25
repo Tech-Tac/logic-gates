@@ -68,8 +68,7 @@ class OutputSlot extends Slot {
 
   // Makes a new mutual connection between the slots
   connectTo(targetInput, pathPoints) {
-    if (targetInput.connection) targetInput.connection.disconnect();
-    this.connections.push((targetInput.connection = new Connection(this, targetInput, pathPoints)));
+    new Connection(this, targetInput, pathPoints).establish();
   }
 }
 
@@ -123,6 +122,13 @@ class Connection {
       this.linePoints,
       this.sourceOutput.value
     );
+  }
+
+  establish() {
+    if (this.destInput.connection) this.destInput.connection.disconnect();
+    this.sourceOutput.connections.push(this);
+    this.destInput.connection = this;
+    this.propagate();
   }
 
   disconnect() {
@@ -545,16 +551,22 @@ class RemoveComponentCommand extends Command {
     super();
     this.workspace = workspace;
     this.component = component;
-    this.x = x;
-    this.y = y;
+    this.connections = [];
+
+    // mmm, unreadability
+    for (let i = 0; i < component.inputs.length; i++) if (component.inputs[i].connection) this.connections.push(component.inputs[i].connection);
+    for (let i = 0; i < component.outputs.length; i++) this.connections.push(...component.outputs[i].connections);
   }
 
   execute() {
-    workspace.addComponent(this.component, this.x, this.y);
+    workspace.removeComponent(this.component);
   }
 
   reverse() {
-    workspace.removeComponent(this.component);
+    console.log(this.connections);
+
+    workspace.addComponent(this.component, this.component.x, this.component.y);
+    for (let i = 0; i < this.connections.length; i++) this.connections[i].establish();
   }
 }
 
@@ -575,7 +587,6 @@ class MoveComponentCommand extends Command {
 
   reverse() {
     this.workspace.moveComponent(this.component, this.fromX, this.fromY);
-    console.log("reversed");
   }
 }
 
@@ -698,7 +709,6 @@ class Workspace extends Circuit {
   moveComponent(component, x, y) {
     this.animate(component, "x", Math.round(x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
     this.animate(component, "y", Math.round(y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
-    console.log("Moved component");
   }
 
   /**
@@ -869,7 +879,7 @@ class Workspace extends Circuit {
         const menu = [
           {
             text: "Duplicate",
-            action: () => this.components.push(targetComponent.clone()),
+            action: () => this.history.execute(new AddComponentCommand(this, targetComponent.clone(), ...point)),
           },
           {
             text: "Disconnect",
@@ -877,7 +887,7 @@ class Workspace extends Circuit {
           },
           {
             text: "Remove",
-            action: () => this.removeComponent(targetComponent),
+            action: () => this.history.execute(new RemoveComponentCommand(this, targetComponent)),
           },
         ];
         contextMenu(menu, e.clientX, e.clientY);

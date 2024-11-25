@@ -552,10 +552,9 @@ class RemoveComponentCommand extends Command {
     this.workspace = workspace;
     this.component = component;
     this.connections = [];
-
-    // mmm, unreadability
-    for (let i = 0; i < component.inputs.length; i++) if (component.inputs[i].connection) this.connections.push(component.inputs[i].connection);
-    for (let i = 0; i < component.outputs.length; i++) this.connections.push(...component.outputs[i].connections);
+    this.connections.push(...this.component.inputs.map((i) => i.connection));
+    this.connections.push(...this.component.outputs.map((o) => o.connections).flat());
+    this.connections = this.connections.filter((v) => v != null);
   }
 
   execute() {
@@ -563,8 +562,6 @@ class RemoveComponentCommand extends Command {
   }
 
   reverse() {
-    console.log(this.connections);
-
     workspace.addComponent(this.component, this.component.x, this.component.y);
     for (let i = 0; i < this.connections.length; i++) this.connections[i].establish();
   }

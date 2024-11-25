@@ -89,12 +89,12 @@ class Connection {
    * Line turn points
    * @type {[x: Number, y: Number][]}
    */
-  linePoints = [];
+  path = [];
 
-  constructor(source, dest, linePoints) {
+  constructor(source, dest, pathPoints) {
     this.sourceOutput = source;
     this.destInput = dest;
-    this.linePoints = linePoints ?? [];
+    this.path = pathPoints ?? [];
 
     this.propagate();
   }
@@ -119,7 +119,7 @@ class Connection {
       ctx,
       this.sourceOutput.parentComponent.getOutputPosition(this.sourceOutput.getIndex()),
       this.destInput.parentComponent.getInputPosition(this.destInput.getIndex()),
-      this.linePoints,
+      this.path,
       this.sourceOutput.value
     );
   }
@@ -234,15 +234,12 @@ class Component {
     return [this.x + this.width, this.y + ((this.height / this.outputs.length) * n + this.height / this.outputs.length / 2)];
   }
 
+  getAllConnections() {
+    return [...this.inputs.map((i) => i.connection), ...this.outputs.map((o) => o.connections).flat()].filter((v) => v != null);
+  }
+
   dismember() {
-    for (let ii = 0; ii < this.inputs.length; ii++) {
-      this.inputs[ii].connection?.disconnect();
-    }
-    for (let oi = 0; oi < this.outputs.length; oi++) {
-      for (let ci = this.outputs[oi].connections.length; ci >= 0; ci--) {
-        this.outputs[oi].connections[ci]?.disconnect();
-      }
-    }
+    this.getAllConnections().forEach((c) => c.disconnect());
   }
 
   /**
@@ -551,19 +548,36 @@ class RemoveComponentCommand extends Command {
     super();
     this.workspace = workspace;
     this.component = component;
-    this.connections = [];
-    this.connections.push(...this.component.inputs.map((i) => i.connection));
-    this.connections.push(...this.component.outputs.map((o) => o.connections).flat());
-    this.connections = this.connections.filter((v) => v != null);
+    this.connections = component.getAllConnections();
   }
 
   execute() {
-    workspace.removeComponent(this.component);
+    this.workspace.removeComponent(this.component);
   }
 
   reverse() {
-    workspace.addComponent(this.component, this.component.x, this.component.y);
+    this.workspace.addComponent(this.component, this.component.x, this.component.y);
     for (let i = 0; i < this.connections.length; i++) this.connections[i].establish();
+  }
+}
+
+class ClearCommand extends Command {
+  constructor(workspace) {
+    super();
+    this.workspace = workspace;
+    this.inputs = workspace.inputs;
+    this.outputs = workspace.outputs;
+    this.components = workspace.components;
+  }
+
+  execute() {
+    this.workspace.components = this.workspace.inputs = this.workspace.outputs = [];
+  }
+
+  reverse() {
+    workspace.components = this.components;
+    workspace.inputs = this.inputs;
+    workspace.outputs = this.outputs;
   }
 }
 
@@ -588,20 +602,32 @@ class MoveComponentCommand extends Command {
 }
 
 class ConnectCommand extends Command {
-  constructor(sourceOutput, destInput, path) {
+  constructor(...connections) {
     super();
-    this.outputSlot = sourceOutput;
-    this.destInput = destInput;
-    this.path = path;
+    this.connections = connections;
   }
 
   execute() {
-    this.outputSlot.connectTo(this.destInput, this.path);
-    this.connection = this.destInput.connection;
+    this.connections.forEach((c) => c.establish());
   }
 
   reverse() {
-    this.connection.disconnect();
+    this.connections.forEach((c) => c.disconnect());
+  }
+}
+
+class DisconnectCommand extends Command {
+  constructor(...connections) {
+    super();
+    this.connections = connections;
+  }
+
+  execute() {
+    this.connections.forEach((c) => c.disconnect());
+  }
+
+  reverse() {
+    this.connections.forEach((c) => c.establish());
   }
 }
 
@@ -844,7 +870,7 @@ class Workspace extends Circuit {
           const targetInput = target.getInputAtY(relativeY);
 
           if (targetInput) {
-            this.history.execute(new ConnectCommand(this.connectingOutputSlot, targetInput, this.connectingPath));
+            this.history.execute(new ConnectCommand(new Connection(this.connectingOutputSlot, targetInput, this.connectingPath)));
           }
         }
       } else if (this.draggedComponent) {
@@ -880,7 +906,7 @@ class Workspace extends Circuit {
           },
           {
             text: "Disconnect",
-            action: () => targetComponent.dismember(),
+            action: () => this.history.execute(new DisconnectCommand(targetComponent.getAllConnections())),
           },
           {
             text: "Remove",
@@ -919,7 +945,7 @@ class Workspace extends Circuit {
           },
           {
             text: "Clear",
-            action: () => (this.components = this.inputs = this.outputs = []),
+            action: () => this.history.execute(new ClearCommand(this)),
           },
           {
             divider: true,
@@ -1009,6 +1035,7 @@ class Workspace extends Circuit {
 
     this.ctx.restore();
 
+    // To avoid the draw function being called more than once a frame when called normally
     if (this.animationQueue.length > 0 && loop) requestAnimationFrame(() => this.draw(performance.now(), true));
   }
 }
@@ -1153,7 +1180,7 @@ function registerComponent(component) {
 function initializePalette() {
   palette.addEventListener("pointerup", function () {
     if (workspace.draggedComponent && palette.draggedInstance === undefined) {
-      workspace.removeComponent(workspace.draggedComponent);
+      workspace.history.execute(new RemoveComponentCommand(workspace, workspace.draggedComponent));
       workspace.draggedComponent = undefined;
     }
     palette.draggedInstance = undefined;

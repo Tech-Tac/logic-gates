@@ -154,6 +154,8 @@ class Component {
   label = "";
   x = 0;
   y = 0;
+  actualX = 0;
+  actualY = 0;
   width = 80;
   height = this.sizing;
 
@@ -178,6 +180,15 @@ class Component {
     this.width = Math.min(Math.max(80, Math.ceil((this.label.length * 16 + 24) / 16) * 16), 192);
     this.height = Math.max(this.inputs.length * this.sizing, this.outputs.length * this.sizing, this.sizing);
     this.update();
+  }
+
+  setPosition(x, y, actual) {
+    this.x = x ?? 0;
+    this.y = y ?? 0;
+    if (actual) {
+      this.actualX = this.x;
+      this.actualY = this.y;
+    }
   }
 
   // Returns a duplicate of self
@@ -281,6 +292,14 @@ class Component {
         output.connections[ci].draw(ctx);
       }
     }
+  }
+
+  toPersistenceObject() {
+    return {
+      type: this.type,
+      x: this.actualX ?? this.x,
+      y: this.actualY ?? this.y,
+    };
   }
 
   /**
@@ -392,8 +411,8 @@ class Circuit {
     component.id = this.components.push(component);
     if (component.type === "input") this.inputs.push(component);
     else if (component.type === "output") this.outputs.push(component);
-    component.x = x ?? 0;
-    component.y = y ?? 0;
+
+    component.setPosition(x, y, true);
   }
 
   removeComponent(component) {
@@ -435,6 +454,51 @@ class Circuit {
     return result;
   }
 
+  clear() {
+    this.components = [];
+    this.inputs = [];
+    this.outputs = [];
+  }
+
+  populate(components) {
+    this.clear();
+    components.forEach((c) => this.addComponent(c, c.actualX, c.actualY));
+  }
+
+  /**
+   * @returns {Connection[]}
+   */
+  getAllConnections() {
+    return [...new Set(this.components.map((c) => c.getAllConnections()).flat())];
+  }
+
+  toPersistenceObject() {
+    return {
+      components: this.components.map((c) => c.toPersistenceObject()),
+      connections: this.getAllConnections().map((c) => ({
+        from: [this.components.indexOf(c.sourceOutput.parentComponent), c.sourceOutput.getIndex()],
+        to: [this.components.indexOf(c.destInput.parentComponent), c.destInput.getIndex()],
+        path: c.path,
+      })),
+    };
+  }
+
+  loadPersistenceObject(object) {
+    this.clear();
+
+    object.components.forEach((c) => {
+      if (c.type === "custom") this.addComponent(CustomComponent.fromPersistenceObject(c), c.x, c.y);
+      else this.addComponent(defaultComponents[c.type].clone(), c.x, c.y);
+    });
+    object.connections.forEach((c) => this.components[c.from[0]].outputs[c.from[1]].connectTo(this.components[c.to[0]].inputs[c.to[1]], c.path));
+  }
+
+  static fromPersistenceObject(object) {
+    const circuit = new Circuit();
+    circuit.loadPersistenceObject(object);
+    return circuit;
+  }
+
   toCustomComponent(name) {
     return new CustomComponent(name, this);
   }
@@ -449,6 +513,19 @@ class CustomComponent extends Component {
   }
   clone() {
     return new CustomComponent(this.label, this.circuit);
+  }
+
+  toPersistenceObject() {
+    const object = super.toPersistenceObject();
+    object.name = this.label;
+    object.circuit = this.circuit.toPersistenceObject();
+    return object;
+  }
+
+  static fromPersistenceObject(object) {
+    const instance = new this(object.name, Circuit.fromPersistenceObject(object.circuit));
+    instance.setPosition(object.x, object.y, true);
+    return instance;
   }
 }
 
@@ -500,12 +577,19 @@ class HistoryManager {
    */
   redoStack = [];
 
-  constructor() {}
+  constructor(sideEffect) {
+    this.sideEffect = sideEffect ?? (() => {});
+  }
 
   execute(command) {
     command.execute();
+    this.add(command);
+  }
+
+  add(command) {
     this.undoStack.push(command);
     this.redoStack = [];
+    this.sideEffect?.();
   }
 
   undo() {
@@ -513,6 +597,7 @@ class HistoryManager {
       const command = this.undoStack.pop();
       command.reverse();
       this.redoStack.push(command);
+      this.sideEffect?.();
     }
   }
 
@@ -521,6 +606,7 @@ class HistoryManager {
       const command = this.redoStack.pop();
       command.execute();
       this.undoStack.push(command);
+      this.sideEffect?.();
     }
   }
 }
@@ -556,7 +642,7 @@ class RemoveComponentCommand extends Command {
   }
 
   reverse() {
-    this.workspace.addComponent(this.component, this.component.x, this.component.y);
+    this.workspace.addComponent(this.component, this.component.actualX, this.component.actualY);
     for (let i = 0; i < this.connections.length; i++) this.connections[i].establish();
   }
 }
@@ -565,19 +651,32 @@ class ClearCommand extends Command {
   constructor(workspace) {
     super();
     this.workspace = workspace;
-    this.inputs = workspace.inputs;
-    this.outputs = workspace.outputs;
     this.components = workspace.components;
   }
 
   execute() {
-    this.workspace.components = this.workspace.inputs = this.workspace.outputs = [];
+    this.workspace.clear();
   }
 
   reverse() {
-    workspace.components = this.components;
-    workspace.inputs = this.inputs;
-    workspace.outputs = this.outputs;
+    workspace.populate(this.components);
+  }
+}
+
+class PopulateCommand extends Command {
+  constructor(workspace, newComponents, oldComponents) {
+    super();
+    this.workspace = workspace;
+    this.newComponents = newComponents;
+    this.oldComponents = oldComponents ?? workspace.components;
+  }
+
+  execute() {
+    this.workspace.populate(this.newComponents);
+  }
+
+  reverse() {
+    this.workspace.populate(this.oldComponents);
   }
 }
 
@@ -586,8 +685,8 @@ class MoveComponentCommand extends Command {
     super();
     this.workspace = workspace;
     this.component = component;
-    this.fromX = fromX ?? component.x;
-    this.fromY = fromY ?? component.y;
+    this.fromX = fromX ?? component.actualX;
+    this.fromY = fromY ?? component.actualY;
     this.toX = toX;
     this.toY = toY;
   }
@@ -632,8 +731,6 @@ class DisconnectCommand extends Command {
 }
 
 class Workspace extends Circuit {
-  history = new HistoryManager();
-
   scale = devicePixelRatio || 1;
 
   showGrid = true;
@@ -675,10 +772,22 @@ class Workspace extends Circuit {
   _pointerX = 0;
   _pointerY = 0;
 
-  constructor(canvas) {
+  constructor(name, canvas) {
     super();
+    this.name = name;
+    this.history = new HistoryManager(() => this.saveToStorage());
     this.ctx = canvas.getContext("2d");
     this.initializeCanvas();
+    this.loadFromStorage();
+  }
+
+  saveToStorage() {
+    localStorage.setItem(this.name + "_workspace", JSON.stringify(this.toPersistenceObject()));
+  }
+
+  loadFromStorage() {
+    const data = localStorage.getItem(this.name + "_workspace");
+    if (data) this.loadPersistenceObject(JSON.parse(data));
   }
 
   animate(subject, property, targetValue, length, easingFunc, endCallback) {
@@ -729,9 +838,54 @@ class Workspace extends Circuit {
     this.draw();
   }
 
-  moveComponent(component, x, y) {
-    this.animate(component, "x", Math.round(x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
-    this.animate(component, "y", Math.round(y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+  moveComponent(component, x, y, animate = true) {
+    component.actualX = x;
+    component.actualY = y;
+    if (animate) {
+      this.animate(component, "x", Math.round(x / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+      this.animate(component, "y", Math.round(y / this.gridSize) * this.gridSize, 100, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+    } else {
+      component.setPosition(x, y);
+    }
+  }
+
+  downloadJson() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(this.toPersistenceObject())], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = this.name + ".json";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  loadJsonFile(makeHistory = false) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+
+    input.addEventListener("input", (e) => {
+      const file = e.target.files[0];
+
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const object = JSON.parse(e.target.result);
+            const oldComponents = [...this.components];
+            this.loadPersistenceObject(object);
+            this.history.add(new PopulateCommand(this, this.components, oldComponents));
+            this.draw();
+          } catch (error) {
+            alert("Error reading file: " + error);
+          }
+        };
+        reader.readAsText(file);
+      }
+    });
+
+    input.click();
+    input.remove();
   }
 
   /**
@@ -879,6 +1033,7 @@ class Workspace extends Circuit {
           this.moveComponent(this.draggedComponent, ...pos);
           this.draggedComponent.createCommand.x = pos[0];
           this.draggedComponent.createCommand.y = pos[1];
+          this.history.add(this.draggedComponent.createCommand);
           delete this.draggedComponent.new;
           delete this.draggedComponent.createCommand;
         } else {
@@ -917,16 +1072,20 @@ class Workspace extends Circuit {
       } else {
         const menu = [
           {
-            text: "Save",
+            text: "Save to Disk",
             hint: "ctrl + s",
-            action: () => {},
-            disabled: true, // Not yet implemented
+            action: () => this.downloadJson(),
+          },
+          {
+            text: "Load from Disk",
+            hint: "ctrl + o",
+            action: () => this.loadJsonFile(true),
           },
           {
             text: "Convert to Component",
             action: () => {
               const component = this.toCustomComponent(prompt("Component name:", "custom"));
-              registerComponent(component);
+              registerCustomComponent(component);
               this.history.execute(new AddComponentCommand(this, component, ...point));
             },
             disabled: this.inputs.length < 1 || this.outputs.length < 1,
@@ -945,6 +1104,7 @@ class Workspace extends Circuit {
           },
           {
             text: "Clear",
+            hint: "ctrl + alt + d",
             action: () => this.history.execute(new ClearCommand(this)),
           },
           {
@@ -961,8 +1121,11 @@ class Workspace extends Circuit {
     });
 
     const keyBinds = {
+      "ctrl+s": () => this.downloadJson(),
+      "ctrl+o": () => this.loadJsonFile(),
       "ctrl+z": () => this.history.undo(),
       "ctrl+y": () => this.history.redo(),
+      "ctrl+alt+d": () => this.history.execute(new ClearCommand(this)),
     };
 
     document.addEventListener("keydown", (e) => {
@@ -1130,7 +1293,7 @@ function contextMenu(menu, x, y) {
 }
 
 const canvas = document.getElementById("mainCanvas");
-const workspace = new Workspace(canvas);
+const workspace = new Workspace("circuit", canvas);
 const palette = document.querySelector(".palette");
 
 function registerComponent(component) {
@@ -1145,14 +1308,11 @@ function registerComponent(component) {
 
   newItem.addEventListener("pointerdown", (e) => {
     palette.draggedInstance = instance = component.clone();
-    const command = new AddComponentCommand(
-      workspace,
-      instance,
-      ...workspace.screenToWorld(e.clientX - (instance.width / 2) * workspace.zoom, e.clientY - (instance.height / 2) * workspace.zoom)
-    );
+    const pos = workspace.screenToWorld(e.clientX - (instance.width / 2) * workspace.zoom, e.clientY - (instance.height / 2) * workspace.zoom);
+    const command = new AddComponentCommand(workspace, instance, ...pos);
     instance.new = true;
     instance.createCommand = command;
-    workspace.history.execute(command);
+    workspace.addComponent(instance, ...pos);
     workspace.draggedComponent = instance;
     palette.classList.remove("open");
   });
@@ -1166,8 +1326,11 @@ function registerComponent(component) {
   newItem.addEventListener("pointerup", () => {
     if (instance === undefined) return;
     const position = workspace.screenToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
-    instance.x = Math.round(position[0] - instance.width / 2 / workspace.gridSize) * workspace.gridSize;
-    instance.y = Math.round(position[1] - instance.height / 2 / workspace.gridSize) * workspace.gridSize;
+    instance.setPosition(
+      Math.round(position[0] - instance.width / 2 / workspace.gridSize) * workspace.gridSize,
+      Math.round(position[1] - instance.height / 2 / workspace.gridSize) * workspace.gridSize,
+      true
+    );
   });
 
   newItem.addEventListener("contextmenu", (e) => {
@@ -1177,7 +1340,16 @@ function registerComponent(component) {
   palette.appendChild(newItem);
 }
 
+function registerCustomComponent(component) {
+  registerComponent(component);
+  const storedArray = JSON.parse(localStorage.getItem("custom_components")) || [];
+  storedArray.push(component.toPersistenceObject());
+  localStorage.setItem("custom_components", JSON.stringify(storedArray));
+}
+
 function initializePalette() {
+  if (workspace.components.length === 0) palette.classList.add("open");
+
   palette.addEventListener("pointerup", function () {
     if (workspace.draggedComponent && palette.draggedInstance === undefined) {
       workspace.history.execute(new RemoveComponentCommand(workspace, workspace.draggedComponent));
@@ -1207,6 +1379,8 @@ function initializePalette() {
   palette.prepend(shelf);
   shelf.appendChild(palette.children[1]);
   shelf.appendChild(palette.children[1]);
+
+  JSON.parse(localStorage.getItem("custom_components"))?.forEach((c) => registerComponent(CustomComponent.fromPersistenceObject(c)));
 }
 
 window.addEventListener("load", initializePalette);

@@ -1104,7 +1104,7 @@ class Workspace extends Circuit {
           },
           {
             text: "Clear",
-            hint: "ctrl + alt + d",
+            hint: "ctrl + shift + d",
             action: () => this.history.execute(new ClearCommand(this)),
           },
           {
@@ -1112,6 +1112,7 @@ class Workspace extends Circuit {
           },
           {
             text: "Toggle Grid",
+            hint: "ctrl + g",
             action: () => this.ctx.canvas.classList.toggle("grid"),
           },
         ];
@@ -1125,7 +1126,8 @@ class Workspace extends Circuit {
       "ctrl+o": () => this.loadJsonFile(),
       "ctrl+z": () => this.history.undo(),
       "ctrl+y": () => this.history.redo(),
-      "ctrl+alt+d": () => this.history.execute(new ClearCommand(this)),
+      "ctrl+g": () => this.ctx.canvas.classList.toggle("grid"),
+      "ctrl+shift+d": () => this.history.execute(new ClearCommand(this)),
     };
 
     document.addEventListener("keydown", (e) => {

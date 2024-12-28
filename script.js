@@ -203,7 +203,7 @@ class Component {
    * @param {Boolean[]} inputs
    * @returns {Boolean[]}
    */
-  evaluate(inputs) {}
+  evaluate(inputs) { }
 
   update() {
     const result = this.evaluate(this.inputs.map((i) => i.value)) ?? [];
@@ -405,7 +405,7 @@ class Circuit {
    */
   components = [];
 
-  constructor() {}
+  constructor() { }
 
   addComponent(component, x, y) {
     component.id = this.components.push(component);
@@ -506,7 +506,7 @@ class Circuit {
 
 class CustomComponent extends Component {
   constructor(label, circuit) {
-    super(label, () => {}, circuit.inputs.length, circuit.outputs.length);
+    super(label, () => { }, circuit.inputs.length, circuit.outputs.length);
     this.circuit = circuit.clone();
     this.evaluate = (inputs) => this.circuit.process(inputs);
     this.type = "custom";
@@ -530,7 +530,7 @@ class CustomComponent extends Component {
 }
 
 class EasedAnimation {
-  constructor(subject, property, targetValue, length, easingFunc = (t) => t, endCallback = () => {}) {
+  constructor(subject, property, targetValue, length, easingFunc = (t) => t, endCallback = () => { }) {
     this.subject = subject;
     this.property = property;
     this.initialValue = subject[property];
@@ -538,32 +538,41 @@ class EasedAnimation {
     this.startTime = performance.now();
     this.length = length;
     this.easingFunc = easingFunc;
-    this.endCallback = endCallback ?? (() => {});
+    this.endCallback = endCallback ?? (() => { });
+    this.running = true;
   }
 
   tick(timestamp = performance.now()) {
     const time = timestamp - this.startTime;
-    if (time > this.length) {
+    if (this.running && time > this.length) {
       this.finish();
       return;
     }
     this.subject[this.property] = this.initialValue + this.easingFunc(time / this.length) * (this.targetValue - this.initialValue);
   }
 
+  stop() {
+    this.running = false;
+    this.endCallback?.();
+  }
+
   abort() {
     this.subject[this.property] = this.initialValue;
+    this.running = false;
+    this.endCallback?.();
   }
 
   finish() {
     this.subject[this.property] = this.targetValue;
+    this.running = false;
     this.endCallback?.();
   }
 }
 
 class Command {
-  constructor() {}
-  execute() {}
-  reverse() {}
+  constructor() { }
+  execute() { }
+  reverse() { }
 }
 
 class HistoryManager {
@@ -578,7 +587,7 @@ class HistoryManager {
   redoStack = [];
 
   constructor(sideEffect) {
-    this.sideEffect = sideEffect ?? (() => {});
+    this.sideEffect = sideEffect ?? (() => { });
   }
 
   execute(command) {
@@ -799,7 +808,7 @@ class Workspace extends Circuit {
         endCallback?.();
       })
     );
-    this.draw(performance.now(), true);
+    return this.animationQueue.at(-1);
   }
 
   // Unused
@@ -830,12 +839,12 @@ class Workspace extends Circuit {
 
   addComponent(...args) {
     super.addComponent(...args);
-    this.draw();
+    this.scheduleDraw();
   }
 
   removeComponent(...args) {
     super.removeComponent(...args);
-    this.draw();
+    this.scheduleDraw();
   }
 
   moveComponent(component, x, y, animate = true) {
@@ -875,7 +884,7 @@ class Workspace extends Circuit {
             const oldComponents = [...this.components];
             this.loadPersistenceObject(object);
             this.history.add(new PopulateCommand(this, this.components, oldComponents));
-            this.draw();
+            this.scheduleDraw();
           } catch (error) {
             alert("Error reading file: " + error);
           }
@@ -889,7 +898,7 @@ class Workspace extends Circuit {
   }
 
   /**
-   * Adds event listeners and readies the canvas
+   * Initializes the canvas and adds event listeners
    */
   initializeCanvas() {
     // Scale everything by the CSS pixel ratio to make the canvas crisp on high DPI screens
@@ -901,8 +910,12 @@ class Workspace extends Circuit {
       this.ctx.canvas.style.backgroundPosition = `${this.ctx.canvas.width / this.scale / 2 + (this.panX + this.gridSize / 2) * (this.zoom / this.scale)}px
                                                   ${this.ctx.canvas.height / this.scale / 2 + (this.panY + this.gridSize / 2) * (this.zoom / this.scale)}px`;
 
-      this.draw();
+      this.scheduleDraw();
     };
+
+    if (this.gridMode === "CSS") {
+      this.ctx.canvas.classList.add("grid");
+    }
 
     const resizeCanvas = () => {
       this.scale = devicePixelRatio || 1;
@@ -916,18 +929,50 @@ class Workspace extends Circuit {
 
     resizeCanvas();
     updateGrid();
+    this.frame();
 
     const mQuery = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
     mQuery.addEventListener("change", resizeCanvas);
 
     window.addEventListener("resize", resizeCanvas.bind(this));
 
+
+    let animateZoom = true;
+    let snappedZoom = this.zoom;
+    let cssAnimation;
+    let propertyZoom;
+
     this.ctx.canvas.addEventListener(
       "wheel",
       (e) => {
-        this.zoom += ((-e.deltaY / 100) * this.zoom) / 5;
-        this.zoom = Math.min(5, Math.max(0.2, this.zoom));
-        updateGrid();
+        this.zoom = snappedZoom;
+        let zoom = this.zoom;
+        zoom += ((-e.deltaY / 100) * zoom) / 5;
+        snappedZoom = zoom = Math.min(5, Math.max(0.2, zoom));
+
+        if (animateZoom) {
+          propertyZoom?.finish();
+          cssAnimation?.finish();
+          updateGrid();
+
+          cssAnimation = this.ctx.canvas.animate([{
+            backgroundSize: `${this.gridSize * (zoom / this.scale)}px ${this.gridSize * (zoom / this.scale)}px`,
+            backgroundPosition: `${this.ctx.canvas.width / this.scale / 2 + (this.panX + this.gridSize / 2) * (zoom / this.scale)}px
+                                                  ${this.ctx.canvas.height / this.scale / 2 + (this.panY + this.gridSize / 2) * (zoom / this.scale)}px`,
+          }], { duration: 150, easing: "cubic-bezier(0.42, 0, 0.58, 1)" });
+
+          let easeInOutCubic = (t) => t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
+
+          propertyZoom = this.animate(this, "zoom", zoom, 150, (_) => easeInOutCubic(cssAnimation.currentTime / 150), () => {
+            cssAnimation.cancel();
+            updateGrid();
+          });
+        }
+        else {
+          this.zoom = zoom;
+          updateGrid();
+        }
+
       },
       { passive: true } // to shut up devtools
     );
@@ -956,7 +1001,7 @@ class Workspace extends Circuit {
           } else {
             targetInput.toggle();
           }
-          this.draw();
+          this.scheduleDraw();
         } else if (relativeX > target.width - 12 && target.type !== "output") {
           this.connectingOutputSlot = target.getOutputAtY(relativeY);
         } else {
@@ -999,11 +1044,11 @@ class Workspace extends Circuit {
           }
         }
 
-        this.draw();
+        this.scheduleDraw();
       } else if (this.draggedComponent) {
         this.draggedComponent.x += deltaX / this.zoom;
         this.draggedComponent.y += deltaY / this.zoom;
-        this.draw();
+        this.scheduleDraw();
       } else if (this.isPanning) {
         this.panX += deltaX / this.zoom;
         this.panY += deltaY / this.zoom;
@@ -1046,7 +1091,7 @@ class Workspace extends Circuit {
       this.isPanning = false;
       this.draggedComponent = null;
 
-      this.draw();
+      this.scheduleDraw();
     });
 
     this.ctx.canvas.addEventListener("contextmenu", (e) => {
@@ -1146,7 +1191,7 @@ class Workspace extends Circuit {
 
         e.preventDefault();
         keyBinds[keyCombo]();
-        this.draw();
+        this.scheduleDraw();
       }
     });
   }
@@ -1155,10 +1200,25 @@ class Workspace extends Circuit {
     for (let i = 0; i < this.animationQueue.length; i++) this.animationQueue[i].tick(timestamp);
   }
 
-  draw(timestamp = performance.now(), loop = false) {
+  drawScheduled = false;
+
+  scheduleDraw() {
+    this.drawScheduled = true;
+  }
+
+  frame() {
+    if (this.drawScheduled || this.animationQueue.length > 0) {
+      this.draw();
+      this.drawScheduled = false;
+    }
+
+    requestAnimationFrame(this.frame.bind(this));
+  }
+
+  draw() {
     this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
 
-    this.tickAnimations(timestamp);
+    this.tickAnimations(performance.now());
 
     if (this.gridMode === "Canvas") {
       this.ctx.strokeStyle = theme.grid;
@@ -1170,13 +1230,23 @@ class Workspace extends Circuit {
         this.ctx.lineTo(x, this.ctx.canvas.height);
         this.ctx.stroke();
       }
-
       for (let y = (this.ctx.canvas.height / 2 + this.panY * this.zoom) % (this.gridSize * this.zoom); y < this.ctx.canvas.height; y += this.gridSize * this.zoom) {
         this.ctx.beginPath();
         this.ctx.moveTo(0, y);
         this.ctx.lineTo(this.ctx.canvas.width, y);
         this.ctx.stroke();
       }
+
+      /* const dotSize = 2;
+      this.ctx.fillStyle = theme.grid;
+
+      for (let x = (this.ctx.canvas.width / 2 + this.panX * this.zoom) % (this.gridSize * this.zoom); x < this.ctx.canvas.width; x += this.gridSize * this.zoom) {
+        for (let y = (this.ctx.canvas.height / 2 + this.panY * this.zoom) % (this.gridSize * this.zoom); y < this.ctx.canvas.height; y += this.gridSize * this.zoom) {
+          this.ctx.beginPath();
+          this.ctx.arc(x, y, dotSize, 0, Math.PI * 2);
+          this.ctx.fill();
+        }
+      } */
     }
 
     this.ctx.save();
@@ -1199,9 +1269,6 @@ class Workspace extends Circuit {
     }
 
     this.ctx.restore();
-
-    // To avoid the draw function being called more than once a frame when called normally
-    if (this.animationQueue.length > 0 && loop) requestAnimationFrame(() => this.draw(performance.now(), true));
   }
 }
 
@@ -1387,4 +1454,3 @@ function initializePalette() {
 
 window.addEventListener("load", initializePalette);
 
-workspace.draw();

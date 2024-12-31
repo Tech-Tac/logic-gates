@@ -137,24 +137,39 @@ li > ul {
 
 .context-menu li {
   position: relative;
-  padding: 4pt;
+  padding: 8pt;
+  padding-inline: 12pt;
   padding-inline-end: 32pt;
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8pt;
   white-space: nowrap;
   transition: background-color 100ms;
 }
+
+.context-menu li>.text{
+  flex: 1;
+}
+
+.context-menu li>*{
+  pointer-events: none;
+}
+
 
 .context-menu li.disabled {
   pointer-events: none;
   opacity: 0.5;
 }
 
-.context-menu li::before {
-  content: "";
+.context-menu li .icon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
   display: inline-block;
-  vertical-align: middle;
-  height: 24pt;
-  width: 24pt;
-  margin-inline-end: 4pt;
+  height: 24px;
+  width: 24px;
 }
 
 .context-menu li:has(> ul)::after {
@@ -170,9 +185,7 @@ li > ul {
 }
 
 .context-menu small {
-  float: inline-end;
   opacity: 0.75;
-  margin-top: 2pt;
 }
 
 .context-menu hr {

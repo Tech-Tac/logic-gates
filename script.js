@@ -311,7 +311,7 @@ class Component {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
 
-    const ratio = (this.width + 16) / this.height;
+    const ratio = (this.width + 16) / this.height; // Adding 16 to account for the input/output slots
 
     canvas.width = Math.max(resolution, resolution * ratio);
     canvas.height = Math.max(resolution, resolution / ratio);
@@ -586,8 +586,9 @@ class HistoryManager {
    */
   redoStack = [];
 
-  constructor(sideEffect) {
+  constructor(sideEffect, maxStackSize = 128) {
     this.sideEffect = sideEffect ?? (() => { });
+    this.maxStackSize = maxStackSize;
   }
 
   execute(command) {
@@ -597,6 +598,9 @@ class HistoryManager {
 
   add(command) {
     this.undoStack.push(command);
+    if (this.undoStack.length > this.maxStackSize) {
+      this.undoStack.shift();
+    }
     this.redoStack = [];
     this.sideEffect?.();
   }
@@ -725,7 +729,7 @@ class ConnectCommand extends Command {
 }
 
 class DisconnectCommand extends Command {
-  constructor(...connections) {
+  constructor(connections) {
     super();
     this.connections = connections;
   }
@@ -800,6 +804,11 @@ class Workspace extends Circuit {
   }
 
   animate(subject, property, targetValue, length, easingFunc, endCallback) {
+    const existing = this.animationQueue.find((a) => a.subject === subject && a.property === property);
+    if (existing) {
+      existing.stop();
+    }
+
     const that = this;
     this.animationQueue.push(
       new EasedAnimation(subject, property, targetValue, length, easingFunc, function () {
@@ -929,7 +938,7 @@ class Workspace extends Circuit {
 
     resizeCanvas();
     updateGrid();
-    this.frame();
+    this.scheduleDraw();
 
     const mQuery = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
     mQuery.addEventListener("change", resizeCanvas);
@@ -997,7 +1006,7 @@ class Workspace extends Circuit {
         if (relativeX < 12) {
           const targetInput = target.getInputAtY(relativeY);
           if (targetInput.connection) {
-            targetInput.connection.disconnect();
+            this.history.execute(new DisconnectCommand([targetInput.connection]));
           } else {
             targetInput.toggle();
           }
@@ -1099,17 +1108,22 @@ class Workspace extends Circuit {
       const point = this.screenToWorld(e.clientX, e.clientY);
       const targetComponent = this.getComponentAt(...point);
       if (targetComponent) {
+        const allConnections = targetComponent.getAllConnections();
         const menu = [
           {
             text: "Duplicate",
+            icon: "duplicate",
             action: () => this.history.execute(new AddComponentCommand(this, targetComponent.clone(), ...point)),
           },
           {
             text: "Disconnect",
-            action: () => this.history.execute(new DisconnectCommand(targetComponent.getAllConnections())),
+            icon: "unlink",
+            action: () => this.history.execute(new DisconnectCommand(allConnections)),
+            disabled: allConnections.length === 0,
           },
           {
             text: "Remove",
+            icon: "x",
             action: () => this.history.execute(new RemoveComponentCommand(this, targetComponent)),
           },
         ];
@@ -1118,16 +1132,19 @@ class Workspace extends Circuit {
         const menu = [
           {
             text: "Save to Disk",
+            icon: "download",
             hint: "ctrl + s",
             action: () => this.downloadJson(),
           },
           {
             text: "Load from Disk",
+            icon: "upload",
             hint: "ctrl + o",
             action: () => this.loadJsonFile(true),
           },
           {
             text: "Convert to Component",
+            icon: "cube",
             action: () => {
               const component = this.toCustomComponent(prompt("Component name:", "custom"));
               registerCustomComponent(component);
@@ -1137,26 +1154,31 @@ class Workspace extends Circuit {
           },
           {
             text: "Undo",
+            icon: "undo",
             hint: "ctrl + z",
             action: () => this.history.undo(),
             disabled: this.history.undoStack.length === 0,
           },
           {
             text: "Redo",
+            icon: "redo",
             hint: "ctrl + y",
             action: () => this.history.redo(),
             disabled: this.history.redoStack.length === 0,
           },
           {
             text: "Clear",
+            icon: "trash",
             hint: "ctrl + shift + d",
             action: () => this.history.execute(new ClearCommand(this)),
+            disabled: this.components.length === 0,
           },
           {
             divider: true,
           },
           {
             text: "Toggle Grid",
+            icon: this.ctx.canvas.classList.contains("grid") ? "check-circle" : "x-circle",
             hint: "ctrl + g",
             action: () => this.ctx.canvas.classList.toggle("grid"),
           },
@@ -1203,50 +1225,50 @@ class Workspace extends Circuit {
   drawScheduled = false;
 
   scheduleDraw() {
-    this.drawScheduled = true;
-  }
-
-  frame() {
-    if (this.drawScheduled || this.animationQueue.length > 0) {
-      this.draw();
-      this.drawScheduled = false;
+    if (!this.drawScheduled) {
+      this.drawScheduled = true;
+      requestAnimationFrame(this.draw.bind(this));
     }
-
-    requestAnimationFrame(this.frame.bind(this));
   }
 
   draw() {
+    this.drawScheduled = false;
+
     this.ctx.clearRect(0, 0, this.ctx.canvas.width, this.ctx.canvas.height);
 
     this.tickAnimations(performance.now());
 
     if (this.gridMode === "Canvas") {
-      this.ctx.strokeStyle = theme.grid;
-      this.ctx.lineWidth = 1;
+      let gridStyle = "lines";
 
-      for (let x = (this.ctx.canvas.width / 2 + this.panX * this.zoom) % (this.gridSize * this.zoom); x < this.ctx.canvas.width; x += this.gridSize * this.zoom) {
-        this.ctx.beginPath();
-        this.ctx.moveTo(x, 0);
-        this.ctx.lineTo(x, this.ctx.canvas.height);
-        this.ctx.stroke();
-      }
-      for (let y = (this.ctx.canvas.height / 2 + this.panY * this.zoom) % (this.gridSize * this.zoom); y < this.ctx.canvas.height; y += this.gridSize * this.zoom) {
-        this.ctx.beginPath();
-        this.ctx.moveTo(0, y);
-        this.ctx.lineTo(this.ctx.canvas.width, y);
-        this.ctx.stroke();
-      }
+      if (gridStyle === "lines") {
+        this.ctx.strokeStyle = theme.grid;
+        this.ctx.lineWidth = 1;
 
-      /* const dotSize = 2;
-      this.ctx.fillStyle = theme.grid;
-
-      for (let x = (this.ctx.canvas.width / 2 + this.panX * this.zoom) % (this.gridSize * this.zoom); x < this.ctx.canvas.width; x += this.gridSize * this.zoom) {
+        for (let x = (this.ctx.canvas.width / 2 + this.panX * this.zoom) % (this.gridSize * this.zoom); x < this.ctx.canvas.width; x += this.gridSize * this.zoom) {
+          this.ctx.beginPath();
+          this.ctx.moveTo(x, 0);
+          this.ctx.lineTo(x, this.ctx.canvas.height);
+          this.ctx.stroke();
+        }
         for (let y = (this.ctx.canvas.height / 2 + this.panY * this.zoom) % (this.gridSize * this.zoom); y < this.ctx.canvas.height; y += this.gridSize * this.zoom) {
           this.ctx.beginPath();
-          this.ctx.arc(x, y, dotSize, 0, Math.PI * 2);
-          this.ctx.fill();
+          this.ctx.moveTo(0, y);
+          this.ctx.lineTo(this.ctx.canvas.width, y);
+          this.ctx.stroke();
         }
-      } */
+      } else if (gridStyle === "dots") {
+        const dotSize = 2;
+        this.ctx.fillStyle = theme.grid;
+
+        for (let x = (this.ctx.canvas.width / 2 + this.panX * this.zoom) % (this.gridSize * this.zoom); x < this.ctx.canvas.width; x += this.gridSize * this.zoom) {
+          for (let y = (this.ctx.canvas.height / 2 + this.panY * this.zoom) % (this.gridSize * this.zoom); y < this.ctx.canvas.height; y += this.gridSize * this.zoom) {
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, dotSize, 0, Math.PI * 2);
+            this.ctx.fill();
+          }
+        }
+      }
     }
 
     this.ctx.save();
@@ -1269,6 +1291,10 @@ class Workspace extends Circuit {
     }
 
     this.ctx.restore();
+
+    if (this.animationQueue.length > 0) {
+      this.scheduleDraw();
+    }
   }
 }
 
@@ -1295,7 +1321,22 @@ function contextMenu(menu, x, y) {
     }
 
     const li = document.createElement("li");
-    li.textContent = item.text;
+
+    const svgNS = "http://www.w3.org/2000/svg";
+
+    const icon = document.createElementNS(svgNS, "svg");
+    icon.classList.add("icon");
+    if (item.icon) {
+      const useIcon = document.createElementNS(svgNS, "use");
+      useIcon.setAttribute("href", `#${item.icon}`);
+      icon.appendChild(useIcon);
+    }
+    li.appendChild(icon);
+
+    const text = document.createElement("span");
+    text.classList.add("text");
+    text.textContent = item.text;
+    li.appendChild(text);
 
     if (item.hint) {
       const hint = document.createElement("small");
@@ -1453,4 +1494,3 @@ function initializePalette() {
 }
 
 window.addEventListener("load", initializePalette);
-

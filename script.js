@@ -676,11 +676,11 @@ class AddComponentCommand extends Command {
   }
 
   execute() {
-    workspace.addComponent(this.component, this.x, this.y);
+    this.workspace.addComponent(this.component, this.x, this.y);
   }
 
   reverse() {
-    workspace.removeComponent(this.component);
+    this.workspace.removeComponent(this.component);
   }
 }
 
@@ -900,7 +900,10 @@ class Workspace extends Circuit {
   removeComponent(component, animate = true) {
     if (animate) {
       component.dismember();
-      this.animate(component, "scale", 0, 150, (t) => -(Math.cos(Math.PI * t) - 1) / 2, () => super.removeComponent(component));
+      this.animate(component, "scale", 0, 150, (t) => -(Math.cos(Math.PI * t) - 1) / 2, () => {
+        super.removeComponent(component);
+        this.saveToStorage(); // FIXME: This should be in the command, and shouldn't wait for the animation to finish
+      });
     } else {
       super.removeComponent(component);
     }
@@ -1081,7 +1084,7 @@ class Workspace extends Circuit {
 
     // Listening on document to account for accidental movement outside the canvas
     document.addEventListener("pointermove", (e) => {
-      const point = this.screenToWorld(e.clientX, e.clientY); // Assuming the canvas is at 0, 0
+      const point = this.screenToWorld(e.clientX, e.clientY); // FIXME: Assuming the canvas is at 0, 0
       [this._pointerX, this._pointerY] = point; // Store the current cursor position for use in draw()
       const [deltaX, deltaY] = [(e.clientX - lastX) * this.scale, (e.clientY - lastY) * this.scale];
 
@@ -1092,7 +1095,7 @@ class Workspace extends Circuit {
         const axis = this.connectingPath.length % 2 ? 1 : 0;
         const comp = this.connectingPath.length % 2 ? 0 : 1; // Complementary - perpendicular axis
 
-        // Add a point when the cursor takes a 90-degree turn
+        // Add a point when the cursor moves across the grid perpendicular to the last point
         if (Math.abs(point[comp] - last[comp]) >= this.gridSize * 0.75) {
           const newPoint = new Array(2);
           newPoint[axis] = Math.round(point[axis] / this.gridSize) * this.gridSize;
@@ -1249,13 +1252,15 @@ class Workspace extends Circuit {
     };
 
     document.addEventListener("keydown", (e) => {
+      console.log(`received ${e.ctrlKey ? "ctrl+" : ""}${e.shiftKey ? "shift+" : ""}${e.alt ? "alt+" : ""}${e.metaKey ? "meta+" : ""}${e.key}`);
+
       for (const keyCombo in keyBinds) {
         const keys = keyCombo.split("+");
 
         if (keys.includes("ctrl") == e.ctrlKey
           && keys.includes("shift") == e.shiftKey
           && keys.includes("alt") == e.altKey
-          && keys.includes("win") == e.metaKey
+          && keys.includes("meta") == e.metaKey
           && keys.includes(e.key)
         ) {
           console.log("executing", keyCombo);
@@ -1264,11 +1269,9 @@ class Workspace extends Circuit {
           keyBinds[keyCombo]();
           this.scheduleDraw();
           return false;
-        } else {
-          console.log("skipped", e);
-
         }
       }
+      console.log("skipped", e);
     });
   }
 
@@ -1495,7 +1498,11 @@ function registerComponent(component) {
       Math.round(position[1] - instance.height / 2 / workspace.gridSize) * workspace.gridSize,
       true
     );
-    instance.new = false;
+    instance.createCommand.x = position[0];
+    instance.createCommand.y = position[1];
+    workspace.history.add(instance.createCommand);
+    delete instance.new;
+    delete instance.createCommand;
     workspace.draggedComponent = palette.draggedInstance = instance = undefined;
   });
 

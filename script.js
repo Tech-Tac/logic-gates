@@ -152,12 +152,18 @@ class Component {
   sizing = 32;
 
   label = "";
+
+  // x and y are the visual position of the component used in animations,
+  // while actualX and actualY are the actual persisted position of the component.
   x = 0;
   y = 0;
   actualX = 0;
   actualY = 0;
   width = 80;
   height = this.sizing;
+
+  // Should ideally always be 1, but can be used in animations.
+  scale = 1;
 
   /**
    * Input slots
@@ -237,6 +243,14 @@ class Component {
     return this.outputs[this.getOutputIndexAtY(y)];
   }
 
+  getRelativeInputPosition(n) {
+    return [0, ((this.height / this.inputs.length) * n + this.height / this.inputs.length / 2)];
+  }
+
+  getRelativeOutputPosition(n) {
+    return [this.width, ((this.height / this.outputs.length) * n + this.height / this.outputs.length / 2)];
+  }
+
   getInputPosition(n) {
     return [this.x, this.y + ((this.height / this.inputs.length) * n + this.height / this.inputs.length / 2)];
   }
@@ -258,38 +272,47 @@ class Component {
    * @param {CanvasRenderingContext2D} ctx the canvas context to use
    */
   draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+    ctx.scale(this.scale, this.scale);
+    ctx.translate(-this.width / 2, -this.height / 2);
+
     ctx.font = this.sizing + "px monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
     ctx.beginPath();
     ctx.fillStyle = theme.componentFace;
-    ctx.roundRect(this.x, this.y, this.width, this.height, 8);
+    ctx.roundRect(0, 0, this.width, this.height, 8);
     ctx.fill();
 
     ctx.fillStyle = theme.componentText;
-    ctx.fillText(this.label, this.x + this.width / 2, this.y + this.height / 2, this.width);
+    ctx.fillText(this.label, this.width / 2, this.height / 2, this.width);
 
     // Drawing inputs
     for (let i = 0; i < this.inputs.length; i++) {
       ctx.beginPath();
-      ctx.arc(...this.getInputPosition(i), 8, 0, Math.PI * 2);
+      ctx.arc(...this.getRelativeInputPosition(i), 8, 0, Math.PI * 2);
       ctx.fillStyle = this.inputs[i].value ? theme.valueOn : theme.valueOff;
       ctx.fill();
     }
 
     // Drawing outputs
-    for (let oi = 0; oi < this.outputs.length; oi++) {
+    for (let oi = 0; oi < this.outputs.length; oi++) { // oi very british innit
       const output = this.outputs[oi];
       ctx.beginPath();
-      const position = this.getOutputPosition(oi);
+      const position = this.getRelativeOutputPosition(oi);
       ctx.arc(...position, 8, 0, Math.PI * 2);
       ctx.fillStyle = output.value ? theme.valueOn : theme.valueOff;
       ctx.fill();
+    }
 
-      // Drawing connections
-      for (let ci = 0; ci < output.connections.length; ci++) {
-        output.connections[ci].draw(ctx);
+    ctx.restore();
+
+    // Drawing connections
+    for (let oi = 0; oi < this.outputs.length; oi++) {
+      for (let ci = 0; ci < this.outputs[oi].connections.length; ci++) {
+        this.outputs[oi].connections[ci].draw(ctx);
       }
     }
   }
@@ -346,11 +369,19 @@ class GlobalInput extends Component {
   }
 
   draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+    ctx.scale(this.scale, this.scale);
+    ctx.translate(-this.width / 2, -this.height / 2);
+
     ctx.beginPath();
-    ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.sizing / 2, Math.PI * 0.25, Math.PI * 1.75);
-    ctx.lineTo(this.x + this.width / 2, this.y + this.height / 2);
+    ctx.arc(this.width / 2, this.height / 2, this.sizing / 2, Math.PI * 0.25, Math.PI * 1.75);
+    ctx.lineTo(this.width / 2, this.height / 2);
     ctx.fillStyle = this.inputs[0].value ? theme.valueOn : theme.valueOff;
     ctx.fill();
+
+    ctx.restore();
+
     for (let i = 0; i < this.outputs[0].connections.length; i++) {
       this.outputs[0].connections[i].draw(ctx);
     }
@@ -374,11 +405,18 @@ class GlobalOutput extends Component {
   }
 
   draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+    ctx.scale(this.scale, this.scale);
+    ctx.translate(-this.width / 2, -this.height / 2);
+
     ctx.beginPath();
-    ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.sizing / 2, Math.PI * 0.75, Math.PI * 1.25, true);
-    ctx.lineTo(this.x + this.width / 2, this.y + this.height / 2);
+    ctx.arc(this.width / 2, this.height / 2, this.sizing / 2, Math.PI * 0.75, Math.PI * 1.25, true);
+    ctx.lineTo(this.width / 2, this.height / 2);
     ctx.fillStyle = this.inputs[0].value ? theme.valueOn : theme.valueOff;
     ctx.fill();
+
+    ctx.restore();
   }
 }
 
@@ -462,7 +500,7 @@ class Circuit {
 
   populate(components) {
     this.clear();
-    components.forEach((c) => this.addComponent(c, c.actualX, c.actualY));
+    components.forEach((c) => this.addComponent(c, c.actualX, c.actualY, false));
   }
 
   /**
@@ -540,6 +578,10 @@ class EasedAnimation {
     this.easingFunc = easingFunc;
     this.endCallback = endCallback ?? (() => { });
     this.running = true;
+
+    if (this.initialValue === this.targetValue) {
+      this.finish();
+    }
   }
 
   tick(timestamp = performance.now()) {
@@ -846,13 +888,22 @@ class Workspace extends Circuit {
     }
   }
 
-  addComponent(...args) {
-    super.addComponent(...args);
+  addComponent(component, x, y, animate = true) {
+    super.addComponent(component, x, y);
+    if (animate) {
+      component.scale = 0;
+      this.animate(component, "scale", 1, 150, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
+    }
     this.scheduleDraw();
   }
 
-  removeComponent(...args) {
-    super.removeComponent(...args);
+  removeComponent(component, animate = true) {
+    if (animate) {
+      component.dismember();
+      this.animate(component, "scale", 0, 150, (t) => -(Math.cos(Math.PI * t) - 1) / 2, () => super.removeComponent(component));
+    } else {
+      super.removeComponent(component);
+    }
     this.scheduleDraw();
   }
 
@@ -1169,7 +1220,7 @@ class Workspace extends Circuit {
           {
             text: "Clear",
             icon: "trash",
-            hint: "ctrl + shift + d",
+            hint: "ctrl + d",
             action: () => this.history.execute(new ClearCommand(this)),
             disabled: this.components.length === 0,
           },
@@ -1194,26 +1245,29 @@ class Workspace extends Circuit {
       "ctrl+z": () => this.history.undo(),
       "ctrl+y": () => this.history.redo(),
       "ctrl+g": () => this.ctx.canvas.classList.toggle("grid"),
-      "ctrl+shift+d": () => this.history.execute(new ClearCommand(this)),
+      "ctrl+d": () => this.history.execute(new ClearCommand(this)),
     };
 
     document.addEventListener("keydown", (e) => {
       for (const keyCombo in keyBinds) {
         const keys = keyCombo.split("+");
 
-        if (
-          (e.ctrlKey && !keys.includes("ctrl")) ||
-          (e.shiftKey && !keys.includes("shift")) ||
-          (e.altKey && !keys.includes("alt")) ||
-          (e.metaKey && !keys.includes("win")) ||
-          !keys.includes(e.key)
+        if (keys.includes("ctrl") == e.ctrlKey
+          && keys.includes("shift") == e.shiftKey
+          && keys.includes("alt") == e.altKey
+          && keys.includes("win") == e.metaKey
+          && keys.includes(e.key)
         ) {
-          continue;
-        }
+          console.log("executing", keyCombo);
 
-        e.preventDefault();
-        keyBinds[keyCombo]();
-        this.scheduleDraw();
+          e.preventDefault();
+          keyBinds[keyCombo]();
+          this.scheduleDraw();
+          return false;
+        } else {
+          console.log("skipped", e);
+
+        }
       }
     });
   }
@@ -1441,6 +1495,8 @@ function registerComponent(component) {
       Math.round(position[1] - instance.height / 2 / workspace.gridSize) * workspace.gridSize,
       true
     );
+    instance.new = false;
+    workspace.draggedComponent = palette.draggedInstance = instance = undefined;
   });
 
   newItem.addEventListener("contextmenu", (e) => {

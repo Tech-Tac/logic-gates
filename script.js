@@ -917,6 +917,7 @@ class Workspace extends Circuit {
 
 	addComponent(component, x, y, animate = true) {
 		super.addComponent(component, x, y);
+		component.transient = false;
 		if (animate) {
 			component.scale = 0;
 			this.animate(component, "scale", 1, 150, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
@@ -952,14 +953,14 @@ class Workspace extends Circuit {
 				component,
 				"x",
 				Math.round(x / this.gridSize) * this.gridSize,
-				100,
+				150,
 				(t) => -(Math.cos(Math.PI * t) - 1) / 2
 			);
 			this.animate(
 				component,
 				"y",
 				Math.round(y / this.gridSize) * this.gridSize,
-				100,
+				150,
 				(t) => -(Math.cos(Math.PI * t) - 1) / 2
 			);
 		} else {
@@ -967,14 +968,20 @@ class Workspace extends Circuit {
 		}
 	}
 
+	animating = false;
+
 	clear() {
 		const components = [...this.components].sort((a, b) => a.x + a.y - (b.x + b.y));
+		this.animating = true;
 		for (let i = 0; i < components.length; i++) {
 			const component = components[i];
 			component.transient = true;
-			const j = i; // i may change later
+			const j = i;
 			setTimeout(() => {
-				this.removeComponent(component, true, false);
+				if (this.animating) this.removeComponent(component, true, false);
+				if (j === component.length - 1) {
+					this.animating = false;
+				}
 			}, i * Math.min(250 / components.length, 50));
 		}
 	}
@@ -982,12 +989,16 @@ class Workspace extends Circuit {
 	populate(components) {
 		super.clear();
 		const sortedComponents = [...components].sort((a, b) => a.x + a.y - (b.x + b.y));
+		this.animating = true;
 		for (let i = 0; i < sortedComponents.length; i++) {
 			const component = sortedComponents[i];
 			component.transient = false;
-			const j = i; // i may change later
+			const j = i;
 			setTimeout(() => {
-				this.addComponent(component);
+				if (this.animating) this.addComponent(component);
+				if (j === component.length - 1) {
+					this.animating = false;
+				}
 			}, i * Math.min(250 / sortedComponents.length, 50));
 		}
 	}

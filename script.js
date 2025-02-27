@@ -177,6 +177,8 @@ class Component {
 	 */
 	outputs = [];
 
+	transient = false;
+
 	constructor(name, evaluateFunc, numInputs = 2, numOutputs = 1) {
 		this.type = name;
 		this.label = name;
@@ -304,7 +306,6 @@ class Component {
 
 		// Drawing outputs
 		for (let oi = 0; oi < this.outputs.length; oi++) {
-			// oi very british innit
 			const output = this.outputs[oi];
 			ctx.beginPath();
 			const position = this.getRelativeOutputPosition(oi);
@@ -316,9 +317,11 @@ class Component {
 		ctx.restore();
 
 		// Drawing connections
-		for (let oi = 0; oi < this.outputs.length; oi++) {
-			for (let ci = 0; ci < this.outputs[oi].connections.length; ci++) {
-				this.outputs[oi].connections[ci].draw(ctx);
+		if (!this.transient) {
+			for (let oi = 0; oi < this.outputs.length; oi++) {
+				for (let ci = 0; ci < this.outputs[oi].connections.length; ci++) {
+					this.outputs[oi].connections[ci].draw(ctx);
+				}
 			}
 		}
 	}
@@ -453,6 +456,10 @@ class Circuit {
 	 */
 	components = [];
 
+	get persistedComponents() {
+		return this.components.filter((c) => !c.transient);
+	}
+
 	constructor() {}
 
 	addComponent(component, x, y) {
@@ -460,11 +467,11 @@ class Circuit {
 		if (component.type === "input") this.inputs.push(component);
 		else if (component.type === "output") this.outputs.push(component);
 
-		component.setPosition(x, y, true);
+		component.setPosition(x ?? component.x, y ?? component.y, true);
 	}
 
-	removeComponent(component) {
-		component.dismember();
+	removeComponent(component, dismember = true) {
+		if (dismember) component.dismember();
 		this.components.splice(this.components.indexOf(component), 1);
 		if (component.type === "input") this.inputs.splice(this.components.indexOf(component), 1);
 		else if (component.type === "output") this.outputs.splice(this.components.indexOf(component), 1);
@@ -481,15 +488,15 @@ class Circuit {
 	clone() {
 		const result = new Circuit();
 		const map = new WeakMap();
-		for (let i = 0; i < this.components.length; i++) {
-			const component = this.components[i];
+		for (let i = 0; i < this.persistedComponents.length; i++) {
+			const component = this.persistedComponents[i];
 			const copy = component.clone();
 			map.set(component, copy);
 			result.addComponent(copy);
 		}
 
-		for (let c = 0; c < this.components.length; c++) {
-			const component = this.components[c];
+		for (let c = 0; c < this.persistedComponents.length; c++) {
+			const component = this.persistedComponents[c];
 			for (let o = 0; o < component.outputs.length; o++) {
 				const output = component.outputs[o];
 				for (let n = 0; n < output.connections.length; n++) {
@@ -521,12 +528,12 @@ class Circuit {
 	 * @returns {Connection[]}
 	 */
 	getAllConnections() {
-		return [...new Set(this.components.map((c) => c.getAllConnections()).flat())];
+		return [...new Set(this.persistedComponents.map((c) => c.getAllConnections()).flat())];
 	}
 
 	toPersistenceObject() {
 		return {
-			components: this.components.map((c) => c.toPersistenceObject()),
+			components: this.persistedComponents.map((c) => c.toPersistenceObject()),
 			connections: this.getAllConnections().map((c) => ({
 				from: [this.components.indexOf(c.sourceOutput.parentComponent), c.sourceOutput.getIndex()],
 				to: [this.components.indexOf(c.destInput.parentComponent), c.destInput.getIndex()],
@@ -723,7 +730,7 @@ class ClearCommand extends Command {
 	constructor(workspace) {
 		super();
 		this.workspace = workspace;
-		this.components = workspace.components;
+		this.components = workspace.persistedComponents;
 	}
 
 	execute() {
@@ -731,7 +738,7 @@ class ClearCommand extends Command {
 	}
 
 	reverse() {
-		workspace.populate(this.components);
+		this.workspace.populate(this.components);
 	}
 }
 
@@ -740,7 +747,7 @@ class PopulateCommand extends Command {
 		super();
 		this.workspace = workspace;
 		this.newComponents = newComponents;
-		this.oldComponents = oldComponents ?? workspace.components;
+		this.oldComponents = oldComponents ?? workspace.persistedComponents;
 	}
 
 	execute() {
@@ -917,9 +924,10 @@ class Workspace extends Circuit {
 		this.scheduleDraw();
 	}
 
-	removeComponent(component, animate = true) {
+	removeComponent(component, animate = true, dismember = true) {
+		component.transient = true;
 		if (animate) {
-			component.dismember();
+			if (dismember) component.dismember();
 			this.animate(
 				component,
 				"scale",
@@ -927,8 +935,7 @@ class Workspace extends Circuit {
 				150,
 				(t) => -(Math.cos(Math.PI * t) - 1) / 2,
 				() => {
-					super.removeComponent(component);
-					this.saveToStorage(); // FIXME: This should be in the command, and shouldn't wait for the animation to finish
+					super.removeComponent(component, dismember);
 				}
 			);
 		} else {
@@ -957,6 +964,31 @@ class Workspace extends Circuit {
 			);
 		} else {
 			component.setPosition(x, y);
+		}
+	}
+
+	clear() {
+		const components = [...this.components].sort((a, b) => a.x + a.y - (b.x + b.y));
+		for (let i = 0; i < components.length; i++) {
+			const component = components[i];
+			component.transient = true;
+			const j = i; // i may change later
+			setTimeout(() => {
+				this.removeComponent(component, true, false);
+			}, i * Math.min(250 / components.length, 50));
+		}
+	}
+
+	populate(components) {
+		super.clear();
+		const sortedComponents = [...components].sort((a, b) => a.x + a.y - (b.x + b.y));
+		for (let i = 0; i < sortedComponents.length; i++) {
+			const component = sortedComponents[i];
+			component.transient = false;
+			const j = i; // i may change later
+			setTimeout(() => {
+				this.addComponent(component);
+			}, i * Math.min(250 / sortedComponents.length, 50));
 		}
 	}
 

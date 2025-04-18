@@ -1169,6 +1169,7 @@ class Workspace extends Circuit {
           this.connectingOutputSlot = target.getOutputAtY(relativeY);
         } else {
           this.draggedComponent = target;
+          this.animate(target, "scale", 1.15, 150, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
           dragStartX = target.x;
           dragStartY = target.y;
         }
@@ -1256,6 +1257,7 @@ class Workspace extends Circuit {
             new MoveComponentCommand(this, this.draggedComponent, pos[0], pos[1], dragStartX, dragStartY)
           );
         }
+        this.animate(this.draggedComponent, "scale", 1, 150, (t) => -(Math.cos(Math.PI * t) - 1) / 2);
       }
 
       this.connectingOutputSlot = null;
@@ -1620,6 +1622,7 @@ function registerComponent(component) {
 
   newItem.addEventListener("pointerleave", () => {
     if (instance !== undefined) {
+      instance.scale = 1.15;
       palette.draggedInstance = instance = undefined;
     }
   });

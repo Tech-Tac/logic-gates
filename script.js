@@ -1627,9 +1627,11 @@ function registerComponent(component) {
   newItem.addEventListener("pointerup", () => {
     if (instance === undefined) return;
     const position = workspace.screenToWorld(workspace.ctx.canvas.width / 2, workspace.ctx.canvas.height / 2);
+    console.log(position);
+
     instance.setPosition(
-      Math.round(position[0] - instance.width / 2 / workspace.gridSize) * workspace.gridSize,
-      Math.round(position[1] - instance.height / 2 / workspace.gridSize) * workspace.gridSize,
+      Math.round((position[0] - (instance.width / 2)) / workspace.gridSize) * workspace.gridSize,
+      Math.round((position[1] - (instance.height / 2)) / workspace.gridSize) * workspace.gridSize,
       true
     );
     instance.createCommand.x = position[0];

@@ -432,7 +432,7 @@ class GlobalOutput extends Component {
 const defaultComponents = {
   input: new GlobalInput(),
   output: new GlobalOutput(),
-  is: new Component("is", (inputs) => [inputs[0]], 1),
+  // is: new Component("is", (inputs) => [inputs[0]], 1),
   and: new Component("and", (inputs) => [inputs.every((b) => b === true)]),
   or: new Component("or", (inputs) => [inputs.some((b) => b === true)]),
   xor: new Component("xor", (inputs) => [

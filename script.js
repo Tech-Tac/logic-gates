@@ -1015,7 +1015,7 @@ class Workspace extends Circuit {
     link.remove();
   }
 
-  loadJsonFile(makeHistory = false) {
+  loadJsonFile() {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "application/json";
@@ -1029,6 +1029,7 @@ class Workspace extends Circuit {
           try {
             const object = JSON.parse(e.target.result);
             const oldComponents = [...this.components];
+            super.clear();
             this.loadPersistenceObject(object);
             this.history.add(new PopulateCommand(this, this.components, oldComponents));
             this.scheduleDraw();
